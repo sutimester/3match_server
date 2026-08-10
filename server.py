@@ -12,42 +12,125 @@ from room import Room
 class Match3Server:
     def __init__(self):
         self.host = "0.0.0.0"
-        self.port = int(os.environ.get("PORT", "8765"))
+        self.port = int(
+            os.environ.get(
+                "PORT",
+                "8765",
+            )
+        )
+
         self.rooms = {}
 
     @staticmethod
     def random_code():
-        alphabet = string.ascii_uppercase + string.digits
-        return "".join(random.choice(alphabet) for _ in range(4))
+        alphabet = (
+            string.ascii_uppercase
+            + string.digits
+        )
+
+        return "".join(
+            random.choice(alphabet)
+            for _ in range(4)
+        )
 
     def create_room(self, public=False):
         code = self.random_code()
+
         while code in self.rooms:
             code = self.random_code()
-        room = Room(code, public)
+
+        room = Room(
+            code=code,
+            public=public,
+        )
+
         self.rooms[code] = room
         return room
+
+    async def send_error(self, socket, message, code=None):
+        payload = {
+            "type": "error",
+            "message": message,
+        }
+
+        if code:
+            payload["code"] = code
+
+        await socket.send(
+            json.dumps(payload)
+        )
 
     async def send_room_list(self, socket):
         rooms = [
             room.public_info()
             for room in self.rooms.values()
-            if room.public and len(room.sockets) < 2 and room.winner is None
+            if (
+                room.public
+                and not room.is_full
+                and room.winner is None
+            )
         ]
-        await socket.send(json.dumps({"type": "room_list", "rooms": rooms}))
 
-    async def leave_room(self, socket, room, notify=True):
+        rooms.sort(
+            key=lambda item: item["code"]
+        )
+
+        await socket.send(
+            json.dumps({
+                "type": "room_list",
+                "rooms": rooms,
+            })
+        )
+
+    async def leave_current_room(
+        self,
+        socket,
+        room,
+        notify=True,
+    ):
         if room is None:
             return
 
-        if socket in room.sockets:
-            room.sockets.remove(socket)
+        removed_player = room.remove_socket(socket)
 
-        if room.sockets:
-            if notify:
-                await room.broadcast({"event": "player_left"})
-        else:
-            self.rooms.pop(room.code, None)
+        if removed_player is None:
+            return
+
+        if room.is_empty:
+            self.rooms.pop(
+                room.code,
+                None,
+            )
+            return
+
+        if notify:
+            await room.reset_after_player_left()
+
+    async def join_room(
+        self,
+        socket,
+        room,
+    ):
+        player = room.add_socket(socket)
+
+        if player is None:
+            return None
+
+        await socket.send(
+            json.dumps({
+                "type": "joined",
+                "room": room.code,
+                "player": player,
+                "public": room.public,
+                "rules_version": 26,
+            })
+        )
+
+        await room.broadcast({
+            "event": "player_joined",
+        })
+
+        return player
 
     async def handler(self, socket):
         room = None
@@ -58,6 +141,11 @@ class Match3Server:
                 try:
                     data = json.loads(raw)
                 except Exception:
+                    await self.send_error(
+                        socket,
+                        "Invalid JSON message",
+                        "invalid_json",
+                    )
                     continue
 
                 action = data.get("action")
@@ -65,85 +153,191 @@ class Match3Server:
                 if action == "list_rooms":
                     await self.send_room_list(socket)
 
+                elif action == "state":
+                    if room is None:
+                        await self.send_error(
+                            socket,
+                            "You are not in a room",
+                            "not_in_room",
+                        )
+                    else:
+                        await room.send_state_to(socket)
+
                 elif action == "leave":
-                    await self.leave_room(socket, room)
+                    await self.leave_current_room(
+                        socket,
+                        room,
+                    )
+
                     room = None
                     player = None
-                    await socket.send(json.dumps({"type": "left"}))
+
+                    await socket.send(
+                        json.dumps({
+                            "type": "left",
+                        })
+                    )
 
                 elif action == "create":
                     if room is not None:
-                        await self.leave_room(socket, room)
+                        await self.leave_current_room(
+                            socket,
+                            room,
+                        )
 
-                    room = self.create_room(bool(data.get("public", False)))
-                    room.sockets.append(socket)
-                    player = 0
+                    room = self.create_room(
+                        public=bool(
+                            data.get(
+                                "public",
+                                False,
+                            )
+                        )
+                    )
 
-                    await socket.send(json.dumps({
-                        "type": "joined",
-                        "room": room.code,
-                        "player": player,
-                        "public": room.public,
-                    }))
-                    await room.broadcast()
+                    player = await self.join_room(
+                        socket,
+                        room,
+                    )
 
                 elif action == "join":
-                    code = str(data.get("room", "")).upper().strip()
+                    code = str(
+                        data.get(
+                            "room",
+                            "",
+                        )
+                    ).upper().strip()
+
+                    if not code:
+                        await self.send_error(
+                            socket,
+                            "Room code is required",
+                            "missing_room_code",
+                        )
+                        continue
+
                     target = self.rooms.get(code)
 
                     if target is None:
-                        await socket.send(json.dumps({
-                            "type": "error",
-                            "message": "Room not found",
-                        }))
+                        await self.send_error(
+                            socket,
+                            "Room not found",
+                            "room_not_found",
+                        )
                         continue
 
-                    if len(target.sockets) >= 2:
-                        await socket.send(json.dumps({
-                            "type": "error",
-                            "message": "Room is full",
-                        }))
+                    if target.is_full:
+                        await self.send_error(
+                            socket,
+                            "Room is full",
+                            "room_full",
+                        )
                         continue
 
                     if room is not None:
-                        await self.leave_room(socket, room)
+                        await self.leave_current_room(
+                            socket,
+                            room,
+                        )
 
                     room = target
-                    room.sockets.append(socket)
-                    player = 1
 
-                    await socket.send(json.dumps({
-                        "type": "joined",
-                        "room": room.code,
-                        "player": player,
-                        "public": room.public,
-                    }))
-                    await room.broadcast()
+                    player = await self.join_room(
+                        socket,
+                        room,
+                    )
 
                 elif action == "swap":
                     if room is None or player is None:
+                        await self.send_error(
+                            socket,
+                            "You are not in a room",
+                            "not_in_room",
+                        )
                         continue
 
                     a = data.get("a")
                     b = data.get("b")
+
                     if (
-                        isinstance(a, list)
-                        and len(a) == 2
-                        and isinstance(b, list)
-                        and len(b) == 2
+                        not isinstance(a, list)
+                        or len(a) != 2
+                        or not isinstance(b, list)
+                        or len(b) != 2
                     ):
-                        await room.make_move(player, tuple(a), tuple(b))
+                        await self.send_error(
+                            socket,
+                            "Invalid move format",
+                            "invalid_move_format",
+                        )
+                        continue
+
+                    try:
+                        a = (
+                            int(a[0]),
+                            int(a[1]),
+                        )
+                        b = (
+                            int(b[0]),
+                            int(b[1]),
+                        )
+                    except Exception:
+                        await self.send_error(
+                            socket,
+                            "Invalid coordinates",
+                            "invalid_coordinates",
+                        )
+                        continue
+
+                    move_result = await room.make_move(
+                        player,
+                        a,
+                        b,
+                    )
+
+                    if not move_result["ok"]:
+                        reason = move_result["reason"]
+
+                        # no_match is already broadcast as an invalid move.
+                        if reason != "no_match":
+                            await self.send_error(
+                                socket,
+                                reason.replace("_", " ").title(),
+                                reason,
+                            )
+
+                else:
+                    await self.send_error(
+                        socket,
+                        "Unknown action",
+                        "unknown_action",
+                    )
 
         except websockets.exceptions.ConnectionClosed:
             pass
+
         finally:
-            await self.leave_room(socket, room)
+            await self.leave_current_room(
+                socket,
+                room,
+            )
 
     async def run(self):
-        print(f"Match-3 server running on {self.host}:{self.port}")
-        async with websockets.serve(self.handler, self.host, self.port):
+        print(
+            f"Match-3 server running on "
+            f"{self.host}:{self.port}"
+        )
+
+        async with websockets.serve(
+            self.handler,
+            self.host,
+            self.port,
+            ping_interval=20,
+            ping_timeout=20,
+        ):
             await asyncio.Future()
 
 
 if __name__ == "__main__":
-    asyncio.run(Match3Server().run())
+    asyncio.run(
+        Match3Server().run()
+    )

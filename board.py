@@ -2,49 +2,69 @@ import random
 
 ROWS = 8
 COLS = 8
+COLOR_COUNT = 6
+
+RED = 0
+GREEN = 1
+BLUE = 2
+YELLOW = 3
+PURPLE = 4
 GRAY = 5
+
 GRAY_DAMAGE = 10
 
 
 class ServerBoard:
-    def __init__(self):
-        self.grid = self._create_board()
+    """
+    Authoritative Match-3 board used by online multiplayer.
 
-    def _creates_start_match(self, r, c):
-        value = self.grid[r][c]
+    The online client never decides:
+    - whether a move is valid,
+    - what disappears,
+    - how many points are earned,
+    - how much damage is dealt,
+    - whether an extra turn is earned,
+    - whether a dead board must be regenerated.
+    """
+
+    def __init__(self):
+        self.grid = [[0] * COLS for _ in range(ROWS)]
+        self.regenerate_playable()
+
+    @staticmethod
+    def in_bounds(cell):
+        if not isinstance(cell, tuple) or len(cell) != 2:
+            return False
+        r, c = cell
         return (
-            c >= 2
-            and self.grid[r][c - 1] == value
-            and self.grid[r][c - 2] == value
-        ) or (
-            r >= 2
-            and self.grid[r - 1][c] == value
-            and self.grid[r - 2][c] == value
+            isinstance(r, int)
+            and isinstance(c, int)
+            and 0 <= r < ROWS
+            and 0 <= c < COLS
         )
 
-    def _create_board(self):
-        self.grid = [[0] * COLS for _ in range(ROWS)]
-        for r in range(ROWS):
-            for c in range(COLS):
-                choices = list(range(6))
-                random.shuffle(choices)
-                for value in choices:
-                    self.grid[r][c] = value
-                    if not self._creates_start_match(r, c):
-                        break
-        return self.grid
-
-    def load(self, grid):
-        self.grid = [row[:] for row in grid]
+    @staticmethod
+    def adjacent(a, b):
+        return (
+            ServerBoard.in_bounds(a)
+            and ServerBoard.in_bounds(b)
+            and abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1
+        )
 
     def clone(self):
         other = ServerBoard.__new__(ServerBoard)
         other.grid = [row[:] for row in self.grid]
         return other
 
-    @staticmethod
-    def adjacent(a, b):
-        return abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1
+    def load(self, grid):
+        if (
+            not isinstance(grid, list)
+            or len(grid) != ROWS
+            or any(not isinstance(row, list) or len(row) != COLS for row in grid)
+        ):
+            raise ValueError("Invalid board shape")
+
+        self.grid = [row[:] for row in grid]
 
     def swap(self, a, b):
         r1, c1 = a
@@ -54,40 +74,140 @@ class ServerBoard:
             self.grid[r1][c1],
         )
 
+    def _creates_start_match(self, r, c):
+        value = self.grid[r][c]
+
+        horizontal = (
+            c >= 2
+            and self.grid[r][c - 1] == value
+            and self.grid[r][c - 2] == value
+        )
+
+        vertical = (
+            r >= 2
+            and self.grid[r - 1][c] == value
+            and self.grid[r - 2][c] == value
+        )
+
+        return horizontal or vertical
+
+    def _generate_without_matches(self):
+        self.grid = [[0] * COLS for _ in range(ROWS)]
+
+        for r in range(ROWS):
+            for c in range(COLS):
+                choices = list(range(COLOR_COUNT))
+                random.shuffle(choices)
+
+                for value in choices:
+                    self.grid[r][c] = value
+                    if not self._creates_start_match(r, c):
+                        break
+
+    def regenerate_playable(self):
+        attempts = 0
+
+        while True:
+            attempts += 1
+            self._generate_without_matches()
+
+            if not self.collect_runs() and self.has_valid_move():
+                return attempts
+
     def collect_runs(self):
         runs = []
 
+        # Horizontal runs.
         for r in range(ROWS):
             start = 0
+
             while start < COLS:
                 value = self.grid[r][start]
                 end = start + 1
+
                 while end < COLS and self.grid[r][end] == value:
                     end += 1
+
                 if value is not None and end - start >= 3:
                     runs.append({
                         "dir": "h",
                         "value": value,
                         "cells": [(r, c) for c in range(start, end)],
                     })
+
                 start = end
 
+        # Vertical runs.
         for c in range(COLS):
             start = 0
+
             while start < ROWS:
                 value = self.grid[start][c]
                 end = start + 1
+
                 while end < ROWS and self.grid[end][c] == value:
                     end += 1
+
                 if value is not None and end - start >= 3:
                     runs.append({
                         "dir": "v",
                         "value": value,
                         "cells": [(r, c) for r in range(start, end)],
                     })
+
                 start = end
 
         return runs
+
+    def has_valid_move(self):
+        for r in range(ROWS):
+            for c in range(COLS):
+                if c + 1 < COLS:
+                    a = (r, c)
+                    b = (r, c + 1)
+
+                    self.swap(a, b)
+                    valid = bool(self.collect_runs())
+                    self.swap(a, b)
+
+                    if valid:
+                        return True
+
+                if r + 1 < ROWS:
+                    a = (r, c)
+                    b = (r + 1, c)
+
+                    self.swap(a, b)
+                    valid = bool(self.collect_runs())
+                    self.swap(a, b)
+
+                    if valid:
+                        return True
+
+        return False
+
+    def valid_moves(self):
+        result = []
+
+        for r in range(ROWS):
+            for c in range(COLS):
+                candidates = []
+
+                if c + 1 < COLS:
+                    candidates.append(((r, c), (r, c + 1)))
+
+                if r + 1 < ROWS:
+                    candidates.append(((r, c), (r + 1, c)))
+
+                for a, b in candidates:
+                    self.swap(a, b)
+                    valid = bool(self.collect_runs())
+                    self.swap(a, b)
+
+                    if valid:
+                        result.append((a, b))
+
+        return result
 
     def _expand_specials(self, runs):
         matched = set()
@@ -98,14 +218,16 @@ class ServerBoard:
             value = run["value"]
             length = len(cells)
 
-            # Az alap egyező kövek mindig eltűnnek.
+            # The actual matched stones always disappear.
             matched.update(cells)
 
             if length >= 6:
-                # 6+ egyezés:
-                # minden azonos színű kő eltűnik a teljes pályáról,
-                # KIVÉVE a szürkét. Szürke 6+ esetén csak maga az
-                # egyezés tűnik el.
+                # 6+ non-gray:
+                # clear every stone of the matched color.
+                #
+                # 6+ gray:
+                # gray is exempt from global color clear, so only the
+                # actual matched gray run disappears.
                 if value != GRAY:
                     color_cells = {
                         (r, c)
@@ -113,7 +235,9 @@ class ServerBoard:
                         for c in range(COLS)
                         if self.grid[r][c] == value
                     }
+
                     matched.update(color_cells)
+
                     specials.append({
                         "kind": "color_clear",
                         "value": value,
@@ -127,12 +251,18 @@ class ServerBoard:
                     })
 
             elif length == 5:
-                # 5-ös egyezés:
-                # a match középső kövén átmenő TELJES sor ÉS oszlop eltűnik.
+                # Exact 5:
+                # clear full row + full column through the middle stone.
                 middle_r, middle_c = cells[len(cells) // 2]
 
-                matched.update((middle_r, c) for c in range(COLS))
-                matched.update((r, middle_c) for r in range(ROWS))
+                matched.update(
+                    (middle_r, c)
+                    for c in range(COLS)
+                )
+                matched.update(
+                    (r, middle_c)
+                    for r in range(ROWS)
+                )
 
                 specials.append({
                     "kind": "cross_clear",
@@ -141,29 +271,52 @@ class ServerBoard:
                 })
 
             elif length == 4:
-                # 4-es egyezés:
-                # vízszintes match -> teljes sor,
-                # függőleges match -> teljes oszlop.
+                # Exact 4:
+                # horizontal -> entire row
+                # vertical   -> entire column
                 if run["dir"] == "h":
                     row = cells[0][0]
-                    matched.update((row, c) for c in range(COLS))
-                    specials.append({"kind": "row_clear", "index": row})
+
+                    matched.update(
+                        (row, c)
+                        for c in range(COLS)
+                    )
+
+                    specials.append({
+                        "kind": "row_clear",
+                        "index": row,
+                    })
+
                 else:
                     col = cells[0][1]
-                    matched.update((r, col) for r in range(ROWS))
-                    specials.append({"kind": "column_clear", "index": col})
+
+                    matched.update(
+                        (r, col)
+                        for r in range(ROWS)
+                    )
+
+                    specials.append({
+                        "kind": "column_clear",
+                        "index": col,
+                    })
 
         return matched, specials
 
     def _collapse(self):
         for c in range(COLS):
-            values = [
+            survivors = [
                 self.grid[r][c]
                 for r in range(ROWS)
                 if self.grid[r][c] is not None
             ]
-            missing = ROWS - len(values)
-            new_col = [random.randrange(6) for _ in range(missing)] + values
+
+            missing = ROWS - len(survivors)
+
+            new_col = (
+                [random.randrange(COLOR_COUNT) for _ in range(missing)]
+                + survivors
+            )
+
             for r in range(ROWS):
                 self.grid[r][c] = new_col[r]
 
@@ -178,34 +331,45 @@ class ServerBoard:
             self.swap(a, b)
             return None
 
-        color_points = [0, 0, 0, 0, 0, 0]
         total_gray = 0
         total_removed = 0
+
+        color_points = [0] * COLOR_COUNT
+        cascade_color_points = []
+
         cascade = 0
         specials = []
         animation_steps = []
-        cascade_color_points = []
+
+        # 4+ anywhere in the entire consequence chain grants extra turn.
         extra_turn = False
 
         while runs:
             cascade += 1
 
-            # Bármely valódi 4+ match extra kört ad.
             if any(len(run["cells"]) >= 4 for run in runs):
                 extra_turn = True
 
-            matched, new_specials = self._expand_specials(runs)
-            specials.extend(new_specials)
+            matched, step_specials = self._expand_specials(runs)
+            specials.extend(step_specials)
 
-            before = [row[:] for row in self.grid] if record_steps else None
-            step_points = [0, 0, 0, 0, 0, 0]
+            before = (
+                [row[:] for row in self.grid]
+                if record_steps
+                else None
+            )
 
-            # Minden eltűnő nem szürke kő +1 pont.
-            # Minden eltűnő szürke -10 HP az ellenfélnek.
+            step_points = [0] * COLOR_COUNT
+
+            # Every disappearing non-gray stone = +1 point for its color.
+            # Every disappearing gray stone = 10 damage to opponent,
+            # and gives no color point.
             for r, c in matched:
                 value = self.grid[r][c]
+
                 if value is None:
                     continue
+
                 if value == GRAY:
                     total_gray += 1
                 else:
@@ -223,37 +387,42 @@ class ServerBoard:
             if record_steps:
                 animation_steps.append({
                     "before": before,
-                    "matched": [list(cell) for cell in sorted(matched)],
-                    "after": [row[:] for row in self.grid],
+                    "matched": [
+                        list(cell)
+                        for cell in sorted(matched)
+                    ],
+                    "after": [
+                        row[:]
+                        for row in self.grid
+                    ],
+                    "color_points": step_points,
+                    "gray_removed": sum(
+                        1
+                        for r, c in matched
+                        if before[r][c] == GRAY
+                    ),
                 })
 
             runs = self.collect_runs()
 
+        board_regenerated = False
+        regenerate_attempts = 0
+
+        # Dead-board rule.
+        if not self.has_valid_move():
+            regenerate_attempts = self.regenerate_playable()
+            board_regenerated = True
+
         return {
             "color_points": color_points,
+            "cascade_color_points": cascade_color_points,
             "gray_removed": total_gray,
             "damage": total_gray * GRAY_DAMAGE,
             "removed": total_removed,
             "cascade": cascade,
             "specials": specials,
             "animation_steps": animation_steps,
-            "cascade_color_points": cascade_color_points,
             "extra_turn": extra_turn,
+            "board_regenerated": board_regenerated,
+            "regenerate_attempts": regenerate_attempts,
         }
-
-    def valid_moves(self):
-        moves = []
-        for r in range(ROWS):
-            for c in range(COLS):
-                if c + 1 < COLS:
-                    moves.append(((r, c), (r, c + 1)))
-                if r + 1 < ROWS:
-                    moves.append(((r, c), (r + 1, c)))
-
-        valid = []
-        for a, b in moves:
-            clone = self.clone()
-            result = clone.resolve_swap(a, b, record_steps=False)
-            if result is not None:
-                valid.append((a, b, result))
-        return valid
