@@ -133,7 +133,7 @@ class Match3Server:
                 "player": player,
                 "public": room.public,
                 "room_name": room.display_name or room.code,
-                "rules_version": 29,
+                "rules_version": 32,
             })
         )
 

@@ -103,7 +103,7 @@ class Room:
             "players": self.player_count,
             "move_number": self.move_number,
             "restart_ready": self.restart_ready,
-            "rules_version": 29,
+            "rules_version": 32,
         }
 
         if extra:
