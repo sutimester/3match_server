@@ -59,7 +59,7 @@ class Room:
 
         result = self.board.resolve_swap(a, b)
         if result is None:
-            await self.broadcast({"event": "invalid"})
+            await self.broadcast({"event": "invalid", "invalid_player": player})
             return
 
         opponent = 1 - player
@@ -76,4 +76,5 @@ class Room:
             self.turn = opponent
 
         result["event"] = "move"
+        result["mover"] = player
         await self.broadcast(result)
