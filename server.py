@@ -133,7 +133,7 @@ class Match3Server:
                 "player": player,
                 "public": room.public,
                 "room_name": room.display_name or room.code,
-                "rules_version": 32,
+                "rules_version": 33,
             })
         )
 
@@ -266,7 +266,7 @@ class Match3Server:
                         )
                         continue
 
-                    restart_result = await room.toggle_new_game_ready(
+                    restart_result = await room.set_new_game_ready(
                         player,
                     )
 

@@ -28,6 +28,7 @@ class Room:
         self.winner = None
         self.move_number = 0
         self.restart_ready = [False, False]
+        self.restart_pending = False
 
     @property
     def player_count(self):
@@ -103,7 +104,8 @@ class Room:
             "players": self.player_count,
             "move_number": self.move_number,
             "restart_ready": self.restart_ready,
-            "rules_version": 32,
+            "restart_pending": self.restart_pending,
+            "rules_version": 33,
         }
 
         if extra:
@@ -228,12 +230,49 @@ class Room:
             "result": result,
         }
 
-    async def toggle_new_game_ready(self, player):
+    async def _start_new_game_after_ready(self):
         """
-        Online rematch requires BOTH players to press NEW GAME.
-        A player's press toggles their ready state. The server broadcasts
-        the state immediately. Only when both are ready is a fresh match
-        created.
+        Both players are ready. Keep the green 2/2 state visible briefly,
+        then create the fresh match. This runs in its own asyncio task so
+        the websocket handler is never blocked.
+        """
+        await asyncio.sleep(0.65)
+
+        # Room may have changed while waiting.
+        if (
+            self.player_count < 2
+            or self.winner is None
+            or not all(self.restart_ready)
+        ):
+            self.restart_pending = False
+            return
+
+        self.board = ServerBoard()
+        self.hp = [MAX_HP, MAX_HP]
+        self.color_scores = [
+            [0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0],
+        ]
+        self.turn = 0
+        self.winner = None
+        self.move_number = 0
+        self.restart_ready = [False, False]
+        self.restart_pending = False
+
+        await self.broadcast({
+            "event": "new_game",
+        })
+
+    async def set_new_game_ready(self, player):
+        """
+        One-way online rematch confirmation.
+
+        A player pressing NEW GAME becomes ready and stays ready until:
+        - the other player also becomes ready and the new game starts, or
+        - someone leaves the room.
+
+        Repeated clicks from the same player are harmless and do not toggle
+        the ready state back off.
         """
         if player not in (0, 1):
             return {"ok": False, "reason": "invalid_player"}
@@ -244,40 +283,37 @@ class Room:
         if self.winner is None:
             return {"ok": False, "reason": "game_not_over"}
 
-        self.restart_ready[player] = not self.restart_ready[player]
+        if self.restart_pending:
+            return {"ok": True, "started": False, "already_pending": True}
 
-        if all(self.restart_ready):
-            # First synchronize the green state to BOTH clients.
-            await self.broadcast({
-                "event": "restart_ready",
-                "ready_player": player,
-                "all_ready": True,
-            })
+        # Idempotent: clicking again cannot cancel readiness.
+        self.restart_ready[player] = True
 
-            # Leave the green state visible briefly before the new match starts.
-            await asyncio.sleep(0.35)
-
-            self.board = ServerBoard()
-            self.hp = [MAX_HP, MAX_HP]
-            self.color_scores = [
-                [0, 0, 0, 0, 0, 0],
-                [0, 0, 0, 0, 0, 0],
-            ]
-            self.turn = 0
-            self.winner = None
-            self.move_number = 0
-            self.restart_ready = [False, False]
-
-            await self.broadcast({
-                "event": "new_game",
-            })
-            return {"ok": True, "started": True}
+        ready_count = sum(1 for value in self.restart_ready if value)
 
         await self.broadcast({
             "event": "restart_ready",
             "ready_player": player,
-            "all_ready": False,
+            "ready_count": ready_count,
+            "all_ready": ready_count == 2,
         })
+
+        if ready_count == 2:
+            self.restart_pending = True
+            # Broadcast pending state immediately so both clients show green.
+            await self.broadcast({
+                "event": "restart_ready",
+                "ready_player": player,
+                "ready_count": 2,
+                "all_ready": True,
+            })
+
+            asyncio.create_task(
+                self._start_new_game_after_ready()
+            )
+
+            return {"ok": True, "started": False, "scheduled": True}
+
         return {"ok": True, "started": False}
 
     async def reset_after_player_left(self):
@@ -310,6 +346,7 @@ class Room:
         self.winner = None
         self.move_number = 0
         self.restart_ready = [False, False]
+        self.restart_pending = False
 
         await self.broadcast({
             "event": "player_left",
