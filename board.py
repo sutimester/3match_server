@@ -76,6 +76,7 @@ class ServerBoard:
             matched.update(cells)
 
             if len(cells) >= 5:
+                # Existing 5+ effect: clear every stone of the matched color.
                 color_cells = {
                     (r, c)
                     for r in range(ROWS)
@@ -83,7 +84,17 @@ class ServerBoard:
                     if self.grid[r][c] == value
                 }
                 matched.update(color_cells)
+
+                # Also clear the complete column at the third matched cell.
+                third_cell = cells[2]
+                third_col = third_cell[1]
+                matched.update((r, third_col) for r in range(ROWS))
+
                 specials.append({"kind": "color_clear", "value": value})
+                specials.append({
+                    "kind": "five_column_clear",
+                    "index": third_col,
+                })
             elif len(cells) == 4:
                 if run["dir"] == "h":
                     row = cells[0][0]
@@ -127,9 +138,9 @@ class ServerBoard:
         while runs:
             cascade += 1
 
-            # Any 4+ match made during this move, including cascades,
+            # Any 5+ match made during this move, including cascades,
             # grants another turn to the player who initiated the move.
-            if any(len(run["cells"]) >= 4 for run in runs):
+            if any(len(run["cells"]) >= 5 for run in runs):
                 extra_turn = True
 
             matched, new_specials = self.expand_specials(runs)
