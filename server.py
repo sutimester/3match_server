@@ -20,6 +20,10 @@ class Match3Server:
         )
 
         self.rooms = {}
+        # Monotonically increasing public-room display name counter.
+        # Room codes still exist internally for joining/routing, but public
+        # players see Room 1, Room 2, Room 3, ...
+        self.next_public_room_number = 1
 
     @staticmethod
     def random_code():
@@ -39,9 +43,15 @@ class Match3Server:
         while code in self.rooms:
             code = self.random_code()
 
+        display_name = None
+        if public:
+            display_name = f"Room {self.next_public_room_number}"
+            self.next_public_room_number += 1
+
         room = Room(
             code=code,
             public=public,
+            display_name=display_name,
         )
 
         self.rooms[code] = room
@@ -122,7 +132,8 @@ class Match3Server:
                 "room": room.code,
                 "player": player,
                 "public": room.public,
-                "rules_version": 26,
+                "room_name": room.display_name or room.code,
+                "rules_version": 28,
             })
         )
 
@@ -245,6 +256,27 @@ class Match3Server:
                         socket,
                         room,
                     )
+
+                elif action == "new_game":
+                    if room is None or player is None:
+                        await self.send_error(
+                            socket,
+                            "You are not in a room",
+                            "not_in_room",
+                        )
+                        continue
+
+                    restart_result = await room.new_game(
+                        requested_by=player,
+                    )
+
+                    if not restart_result["ok"]:
+                        reason = restart_result["reason"]
+                        await self.send_error(
+                            socket,
+                            reason.replace("_", " ").title(),
+                            reason,
+                        )
 
                 elif action == "swap":
                     if room is None or player is None:

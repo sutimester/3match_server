@@ -6,9 +6,10 @@ MAX_HP = 100
 
 
 class Room:
-    def __init__(self, code, public=False):
+    def __init__(self, code, public=False, display_name=None):
         self.code = code
         self.public = public
+        self.display_name = display_name
 
         # Slots are stable: index 0 = player 1, index 1 = player 2.
         self.sockets = [None, None]
@@ -78,7 +79,10 @@ class Room:
 
     def public_info(self):
         return {
+            # Code is retained in the protocol so clicking the public-room
+            # entry can still join the correct server room.
             "code": self.code,
+            "name": self.display_name or self.code,
             "players": self.player_count,
             "open": not self.is_full,
         }
@@ -88,6 +92,7 @@ class Room:
             "type": "state",
             "room": self.code,
             "public": self.public,
+            "room_name": self.display_name or self.code,
             "board": self.board.grid,
             "hp": self.hp,
             "color_scores": self.color_scores,
@@ -95,7 +100,7 @@ class Room:
             "winner": self.winner,
             "players": self.player_count,
             "move_number": self.move_number,
-            "rules_version": 26,
+            "rules_version": 28,
         }
 
         if extra:
@@ -218,6 +223,36 @@ class Room:
         return {
             "ok": True,
             "result": result,
+        }
+
+    async def new_game(self, requested_by=None):
+        """
+        Start a fresh match in the SAME online room with the SAME players
+        and room settings. HP, scores, board, winner and move counter reset.
+        """
+        if self.player_count < 2:
+            return {
+                "ok": False,
+                "reason": "waiting_for_opponent",
+            }
+
+        self.board = ServerBoard()
+        self.hp = [MAX_HP, MAX_HP]
+        self.color_scores = [
+            [0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0],
+        ]
+        self.turn = 0
+        self.winner = None
+        self.move_number = 0
+
+        await self.broadcast({
+            "event": "new_game",
+            "requested_by": requested_by,
+        })
+
+        return {
+            "ok": True,
         }
 
     async def reset_after_player_left(self):
