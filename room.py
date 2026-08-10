@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 from board import ServerBoard
@@ -26,6 +27,7 @@ class Room:
         self.turn = 0
         self.winner = None
         self.move_number = 0
+        self.restart_ready = [False, False]
 
     @property
     def player_count(self):
@@ -100,7 +102,8 @@ class Room:
             "winner": self.winner,
             "players": self.player_count,
             "move_number": self.move_number,
-            "rules_version": 28,
+            "restart_ready": self.restart_ready,
+            "rules_version": 29,
         }
 
         if extra:
@@ -225,35 +228,57 @@ class Room:
             "result": result,
         }
 
-    async def new_game(self, requested_by=None):
+    async def toggle_new_game_ready(self, player):
         """
-        Start a fresh match in the SAME online room with the SAME players
-        and room settings. HP, scores, board, winner and move counter reset.
+        Online rematch requires BOTH players to press NEW GAME.
+        A player's press toggles their ready state. The server broadcasts
+        the state immediately. Only when both are ready is a fresh match
+        created.
         """
-        if self.player_count < 2:
-            return {
-                "ok": False,
-                "reason": "waiting_for_opponent",
-            }
+        if player not in (0, 1):
+            return {"ok": False, "reason": "invalid_player"}
 
-        self.board = ServerBoard()
-        self.hp = [MAX_HP, MAX_HP]
-        self.color_scores = [
-            [0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0],
-        ]
-        self.turn = 0
-        self.winner = None
-        self.move_number = 0
+        if self.player_count < 2:
+            return {"ok": False, "reason": "waiting_for_opponent"}
+
+        if self.winner is None:
+            return {"ok": False, "reason": "game_not_over"}
+
+        self.restart_ready[player] = not self.restart_ready[player]
+
+        if all(self.restart_ready):
+            # First synchronize the green state to BOTH clients.
+            await self.broadcast({
+                "event": "restart_ready",
+                "ready_player": player,
+                "all_ready": True,
+            })
+
+            # Leave the green state visible briefly before the new match starts.
+            await asyncio.sleep(0.35)
+
+            self.board = ServerBoard()
+            self.hp = [MAX_HP, MAX_HP]
+            self.color_scores = [
+                [0, 0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0, 0],
+            ]
+            self.turn = 0
+            self.winner = None
+            self.move_number = 0
+            self.restart_ready = [False, False]
+
+            await self.broadcast({
+                "event": "new_game",
+            })
+            return {"ok": True, "started": True}
 
         await self.broadcast({
-            "event": "new_game",
-            "requested_by": requested_by,
+            "event": "restart_ready",
+            "ready_player": player,
+            "all_ready": False,
         })
-
-        return {
-            "ok": True,
-        }
+        return {"ok": True, "started": False}
 
     async def reset_after_player_left(self):
         """
@@ -284,6 +309,7 @@ class Room:
         self.turn = 0
         self.winner = None
         self.move_number = 0
+        self.restart_ready = [False, False]
 
         await self.broadcast({
             "event": "player_left",
