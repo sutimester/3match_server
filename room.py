@@ -5,6 +5,13 @@ from board import ServerBoard
 
 MAX_HP = 100
 
+RED = 0
+GREEN = 1
+BLUE = 2
+YELLOW = 3
+PURPLE = 4
+ABILITY_COST = 10
+
 
 class Room:
     def __init__(self, code, public=False, display_name=None):
@@ -18,6 +25,7 @@ class Room:
         self.board = ServerBoard()
 
         self.hp = [MAX_HP, MAX_HP]
+        self.max_hp = [MAX_HP, MAX_HP]
 
         self.color_scores = [
             [0, 0, 0, 0, 0, 0],
@@ -27,6 +35,12 @@ class Room:
         self.turn = 0
         self.winner = None
         self.move_number = 0
+
+        # Server-authoritative ability/turn state.
+        self.ability_slots = [1, 0]
+        self.own_turn_count = [1, 0]
+        self.extra_turn_bank = [0, 0]
+
         self.restart_ready = [False, False]
         self.restart_pending = False
 
@@ -98,14 +112,18 @@ class Room:
             "room_name": self.display_name or self.code,
             "board": self.board.grid,
             "hp": self.hp,
+            "max_hp": self.max_hp,
             "color_scores": self.color_scores,
+            "ability_slots": self.ability_slots,
+            "own_turn_count": self.own_turn_count,
+            "extra_turn_bank": self.extra_turn_bank,
             "turn": self.turn,
             "winner": self.winner,
             "players": self.player_count,
             "move_number": self.move_number,
             "restart_ready": self.restart_ready,
             "restart_pending": self.restart_pending,
-            "rules_version": 33,
+            "rules_version": 34,
         }
 
         if extra:
@@ -138,6 +156,119 @@ class Room:
 
         for socket in dead:
             self.remove_socket(socket)
+
+    def yellow_available(self, player):
+        return (
+            self.own_turn_count[player] > 0
+            and self.own_turn_count[player] % 2 == 0
+        )
+
+    def ability_available(self, player, ability):
+        if player not in (0, 1):
+            return False, "invalid_player"
+
+        if self.winner is not None:
+            return False, "game_over"
+
+        if self.player_count < 2:
+            return False, "waiting_for_opponent"
+
+        if player != self.turn:
+            return False, "not_your_turn"
+
+        if ability not in (RED, GREEN, BLUE, YELLOW, PURPLE):
+            return False, "invalid_ability"
+
+        if self.color_scores[player][ability] < ABILITY_COST:
+            return False, "not_enough_points"
+
+        if ability == GREEN:
+            if self.hp[player] >= self.max_hp[player]:
+                return False, "hp_already_full"
+            return True, None
+
+        if self.ability_slots[player] <= 0:
+            return False, "ability_limit_reached"
+
+        if ability == YELLOW and not self.yellow_available(player):
+            return False, "yellow_not_available_this_turn"
+
+        return True, None
+
+    async def use_ability(self, player, ability):
+        available, reason = self.ability_available(
+            player,
+            ability,
+        )
+
+        if not available:
+            return {
+                "ok": False,
+                "reason": reason,
+            }
+
+        opponent = 1 - player
+        self.color_scores[player][ability] -= ABILITY_COST
+
+        if ability == GREEN:
+            # Unlimited during own turn while green points remain.
+            self.hp[player] = min(
+                self.max_hp[player],
+                self.hp[player] + 5,
+            )
+
+        else:
+            self.ability_slots[player] -= 1
+
+            if ability == RED:
+                self.max_hp[opponent] = max(
+                    0,
+                    self.max_hp[opponent] - 5,
+                )
+                self.hp[opponent] = min(
+                    self.hp[opponent],
+                    self.max_hp[opponent],
+                )
+
+                if self.hp[opponent] <= 0:
+                    self.winner = player
+
+            elif ability == BLUE:
+                self.max_hp[player] += 5
+
+            elif ability == YELLOW:
+                # Bank a guaranteed extra personal turn.
+                self.extra_turn_bank[player] += 1
+
+            elif ability == PURPLE:
+                # Purple consumes the current slot, then grants two extra.
+                self.ability_slots[player] += 2
+
+        await self.broadcast({
+            "event": "ability",
+            "ability_player": player,
+            "ability": ability,
+        })
+
+        return {
+            "ok": True,
+        }
+
+    def _begin_turn(self, player):
+        self.turn = player
+        self.ability_slots = [0, 0]
+        self.ability_slots[player] = 1
+        self.own_turn_count[player] += 1
+
+    def _resolve_next_turn(self, player, board_extra_turn):
+        if board_extra_turn:
+            self.extra_turn_bank[player] += 1
+
+        if self.extra_turn_bank[player] > 0:
+            self.extra_turn_bank[player] -= 1
+            return player
+
+        return 1 - player
 
     async def make_move(self, player, a, b):
         # All online move authorization is server-side.
@@ -209,12 +340,12 @@ class Room:
         if self.hp[opponent] <= 0:
             self.winner = player
 
-        elif result["extra_turn"]:
-            # 4+ match anywhere in the chain.
-            self.turn = player
-
         else:
-            self.turn = opponent
+            next_player = self._resolve_next_turn(
+                player,
+                result["extra_turn"],
+            )
+            self._begin_turn(next_player)
 
         result.update({
             "event": "move",
@@ -249,6 +380,7 @@ class Room:
 
         self.board = ServerBoard()
         self.hp = [MAX_HP, MAX_HP]
+        self.max_hp = [MAX_HP, MAX_HP]
         self.color_scores = [
             [0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0],
@@ -256,6 +388,9 @@ class Room:
         self.turn = 0
         self.winner = None
         self.move_number = 0
+        self.ability_slots = [1, 0]
+        self.own_turn_count = [1, 0]
+        self.extra_turn_bank = [0, 0]
         self.restart_ready = [False, False]
         self.restart_pending = False
 
@@ -338,6 +473,7 @@ class Room:
 
         self.board = ServerBoard()
         self.hp = [MAX_HP, MAX_HP]
+        self.max_hp = [MAX_HP, MAX_HP]
         self.color_scores = [
             [0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0],
@@ -345,6 +481,9 @@ class Room:
         self.turn = 0
         self.winner = None
         self.move_number = 0
+        self.ability_slots = [1, 0]
+        self.own_turn_count = [1, 0]
+        self.extra_turn_bank = [0, 0]
         self.restart_ready = [False, False]
         self.restart_pending = False
 

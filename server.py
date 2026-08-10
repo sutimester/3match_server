@@ -133,7 +133,7 @@ class Match3Server:
                 "player": player,
                 "public": room.public,
                 "room_name": room.display_name or room.code,
-                "rules_version": 33,
+                "rules_version": 34,
             })
         )
 
@@ -256,6 +256,38 @@ class Match3Server:
                         socket,
                         room,
                     )
+
+                elif action == "ability":
+                    if room is None or player is None:
+                        await self.send_error(
+                            socket,
+                            "You are not in a room",
+                            "not_in_room",
+                        )
+                        continue
+
+                    try:
+                        ability = int(data.get("ability"))
+                    except Exception:
+                        await self.send_error(
+                            socket,
+                            "Invalid ability",
+                            "invalid_ability",
+                        )
+                        continue
+
+                    ability_result = await room.use_ability(
+                        player,
+                        ability,
+                    )
+
+                    if not ability_result["ok"]:
+                        reason = ability_result["reason"]
+                        await self.send_error(
+                            socket,
+                            reason.replace("_", " ").title(),
+                            reason,
+                        )
 
                 elif action == "new_game":
                     if room is None or player is None:
