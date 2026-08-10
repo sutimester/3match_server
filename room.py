@@ -15,6 +15,8 @@ class Room:
         self.public=public
         self.display_name=display_name
         self.sockets=[None,None]
+        # Spectators are completely separate from the two player slots.
+        self.spectators=[]
         self.board=ServerBoard()
         self.hp=[100,100]
         self.max_hp=[100,100]
@@ -34,10 +36,26 @@ class Room:
     @property
     def is_full(self):return self.player_count>=2
     @property
-    def is_empty(self):return self.player_count==0
+    def is_empty(self):
+        return self.player_count==0 and len(self.spectators)==0
+
+    @property
+    def spectator_count(self):
+        return len(self.spectators)
+
+    @property
+    def is_live(self):
+        return self.public and self.player_count==2 and self.winner is None
 
     def public_info(self):
-        return {"code":self.code,"name":self.display_name or self.code,"players":self.player_count,"open":not self.is_full}
+        return {
+            "code":self.code,
+            "name":self.display_name or self.code,
+            "players":self.player_count,
+            "spectators":self.spectator_count,
+            "open":not self.is_full,
+            "live":self.is_live,
+        }
 
     def add_socket(self,socket):
         for i,s in enumerate(self.sockets):
@@ -46,27 +64,48 @@ class Room:
 
     def remove_socket(self,socket):
         for i,s in enumerate(self.sockets):
-            if s is socket:self.sockets[i]=None;return i
+            if s is socket:
+                self.sockets[i]=None
+                return i
         return None
+
+    def add_spectator(self,socket):
+        if socket not in self.spectators:
+            self.spectators.append(socket)
+
+    def remove_spectator(self,socket):
+        if socket in self.spectators:
+            self.spectators.remove(socket)
+            return True
+        return False
 
     def state_payload(self,extra=None):
         data={
             "type":"state","room":self.code,"room_name":self.display_name or self.code,"public":self.public,
             "board":self.board.grid,"hp":self.hp,"max_hp":self.max_hp,"color_scores":self.color_scores,
-            "player_names":self.player_names,"turn":self.turn,"winner":self.winner,"players":self.player_count,
+            "player_names":self.player_names,"turn":self.turn,"winner":self.winner,"players":self.player_count,"spectators":self.spectator_count,
             "ability_slots":self.ability_slots,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
-            "rules_version":37,
+            "rules_version":38,
         }
         if extra:data.update(extra)
         return data
 
     async def broadcast(self,extra=None):
         raw=json.dumps(self.state_payload(extra))
+
         for s in list(self.sockets):
             if s is not None:
-                try:await s.send(raw)
-                except Exception:self.remove_socket(s)
+                try:
+                    await s.send(raw)
+                except Exception:
+                    self.remove_socket(s)
+
+        for s in list(self.spectators):
+            try:
+                await s.send(raw)
+            except Exception:
+                self.remove_spectator(s)
 
     async def set_player_name(self,player,name):
         name=str(name or "").strip()[:20] or f"Player {player+1}"

@@ -29,7 +29,11 @@ class Match3Server:
         await socket.send(json.dumps(d))
 
     async def send_room_list(self,socket):
-        rooms=[r.public_info() for r in self.rooms.values() if r.public and not r.is_full and r.winner is None]
+        rooms=[
+            r.public_info()
+            for r in self.rooms.values()
+            if r.public and r.winner is None
+        ]
         await socket.send(json.dumps({"type":"room_list","rooms":rooms}))
 
     async def leave(self,socket,room):
@@ -39,18 +43,65 @@ class Match3Server:
         if room.is_empty:self.rooms.pop(room.code,None)
         else:await room.reset_after_leave()
 
+    async def leave_spectator(self,socket,room):
+        if room is None:
+            return
+
+        room.remove_spectator(socket)
+
+        if room.is_empty:
+            self.rooms.pop(room.code,None)
+
+    async def join_spectator(self,socket,room):
+        if not room.public:
+            await self.send_error(
+                socket,
+                "Only public rooms can be watched",
+                "spectator_public_only",
+            )
+            return False
+
+        if not room.is_live:
+            await self.send_error(
+                socket,
+                "Spectator mode is only available for live public matches",
+                "match_not_live",
+            )
+            return False
+
+        room.add_spectator(socket)
+
+        await socket.send(json.dumps({
+            "type":"spectating",
+            "room":room.code,
+            "room_name":room.display_name or room.code,
+            "public":True,
+            "rules_version":38,
+        }))
+
+        await socket.send(json.dumps(
+            room.state_payload({
+                "event":"spectator_joined",
+                "spectator_mode":True,
+            })
+        ))
+
+        return True
+
     async def join_room(self,socket,room):
         p=room.add_socket(socket)
         if p is None:return None
         await socket.send(json.dumps({
             "type":"joined","room":room.code,"room_name":room.display_name or room.code,
-            "player":p,"public":room.public,"rules_version":37
+            "player":p,"public":room.public,"rules_version":38
         }))
         await room.broadcast({"event":"player_joined"})
         return p
 
     async def handler(self,socket):
-        room=None;player=None
+        room=None
+        player=None
+        spectator=False
         try:
             async for raw in socket:
                 try:data=json.loads(raw)
@@ -61,9 +112,15 @@ class Match3Server:
                     await self.send_room_list(socket)
 
                 elif action=="create":
-                    if room:await self.leave(socket,room)
+                    if room:
+                        if spectator:
+                            await self.leave_spectator(socket,room)
+                        else:
+                            await self.leave(socket,room)
+
                     room=self.create_room(bool(data.get("public",False)))
                     player=await self.join_room(socket,room)
+                    spectator=False
 
                 elif action=="join":
                     code=str(data.get("room","")).upper().strip()
@@ -72,18 +129,76 @@ class Match3Server:
                         await self.send_error(socket,"Room not found","room_not_found");continue
                     if target.is_full:
                         await self.send_error(socket,"Room is full","room_full");continue
-                    if room:await self.leave(socket,room)
-                    room=target;player=await self.join_room(socket,room)
+                    if room:
+                        if spectator:
+                            await self.leave_spectator(socket,room)
+                        else:
+                            await self.leave(socket,room)
+
+                    room=target
+                    player=await self.join_room(socket,room)
+                    spectator=False
+
+                elif action=="watch":
+                    code=str(data.get("room","")).upper().strip()
+                    target=self.rooms.get(code)
+
+                    if target is None:
+                        await self.send_error(
+                            socket,
+                            "Room not found",
+                            "room_not_found",
+                        )
+                        continue
+
+                    if room:
+                        if spectator:
+                            await self.leave_spectator(socket,room)
+                        else:
+                            await self.leave(socket,room)
+
+                    ok=await self.join_spectator(socket,target)
+
+                    if ok:
+                        room=target
+                        player=None
+                        spectator=True
+                    else:
+                        room=None
+                        player=None
+                        spectator=False
 
                 elif action=="leave":
-                    await self.leave(socket,room);room=None;player=None
+                    if spectator:
+                        await self.leave_spectator(socket,room)
+                    else:
+                        await self.leave(socket,room)
+
+                    room=None
+                    player=None
+                    spectator=False
                     await socket.send(json.dumps({"type":"left"}))
 
                 elif action=="set_name":
+                    if spectator:
+                        await self.send_error(
+                            socket,
+                            "Spectators cannot change game state",
+                            "spectator_read_only",
+                        )
+                        continue
+
                     if room is not None and player is not None:
                         await room.set_player_name(player,data.get("name",""))
 
                 elif action=="ability":
+                    if spectator:
+                        await self.send_error(
+                            socket,
+                            "Spectators cannot use abilities",
+                            "spectator_read_only",
+                        )
+                        continue
                     if room is None or player is None:continue
                     try:a=int(data.get("ability"))
                     except Exception:continue
@@ -91,12 +206,30 @@ class Match3Server:
                     if not out["ok"]:await self.send_error(socket,out["reason"].replace("_"," ").title(),out["reason"])
 
                 elif action=="new_game":
-                    if room is None or player is None:continue
+                    if spectator:
+                        await self.send_error(
+                            socket,
+                            "Spectators cannot request a new game",
+                            "spectator_read_only",
+                        )
+                        continue
+
+                    if room is None or player is None:
+                        continue
                     out=await room.set_restart_ready(player)
                     if not out["ok"]:await self.send_error(socket,out["reason"].replace("_"," ").title(),out["reason"])
 
                 elif action=="swap":
-                    if room is None or player is None:continue
+                    if spectator:
+                        await self.send_error(
+                            socket,
+                            "Spectators cannot make moves",
+                            "spectator_read_only",
+                        )
+                        continue
+
+                    if room is None or player is None:
+                        continue
                     a=data.get("a");b=data.get("b")
                     if not (isinstance(a,list) and len(a)==2 and isinstance(b,list) and len(b)==2):continue
                     try:a=(int(a[0]),int(a[1]));b=(int(b[0]),int(b[1]))
@@ -108,7 +241,10 @@ class Match3Server:
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
-            await self.leave(socket,room)
+            if spectator:
+                await self.leave_spectator(socket,room)
+            else:
+                await self.leave(socket,room)
 
     async def run(self):
         print(f"Match-3 server on {self.host}:{self.port}")
