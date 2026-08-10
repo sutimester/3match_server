@@ -72,6 +72,9 @@ class Room:
 
         if self.hp[opponent] <= 0:
             self.winner = player
+        elif result.get("extra_turn", False):
+            # 4+ match: the same player starts the next turn.
+            self.turn = player
         else:
             self.turn = opponent
 

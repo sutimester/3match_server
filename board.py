@@ -122,9 +122,15 @@ class ServerBoard:
         color_points = [0, 0, 0, 0, 0, 0]
         animation_steps = []
         cascade_color_points = []
+        extra_turn = False
 
         while runs:
             cascade += 1
+
+            # Any 4+ match made during this move, including cascades,
+            # grants another turn to the player who initiated the move.
+            if any(len(run["cells"]) >= 4 for run in runs):
+                extra_turn = True
 
             matched, new_specials = self.expand_specials(runs)
             specials.extend(new_specials)
@@ -173,4 +179,5 @@ class ServerBoard:
             "color_points": color_points,
             "animation_steps": animation_steps,
             "cascade_color_points": cascade_color_points,
+            "extra_turn": extra_turn,
         }
