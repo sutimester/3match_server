@@ -133,7 +133,7 @@ class Match3Server:
                 "player": player,
                 "public": room.public,
                 "room_name": room.display_name or room.code,
-                "rules_version": 34,
+                "rules_version": 35,
             })
         )
 
@@ -255,6 +255,20 @@ class Match3Server:
                     player = await self.join_room(
                         socket,
                         room,
+                    )
+
+                elif action == "set_name":
+                    if room is None or player is None:
+                        await self.send_error(
+                            socket,
+                            "You are not in a room",
+                            "not_in_room",
+                        )
+                        continue
+
+                    await room.set_player_name(
+                        player,
+                        data.get("name", ""),
                     )
 
                 elif action == "ability":

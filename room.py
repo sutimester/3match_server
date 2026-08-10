@@ -41,6 +41,8 @@ class Room:
         self.own_turn_count = [1, 0]
         self.extra_turn_bank = [0, 0]
 
+        self.player_names = ["Player 1", "Player 2"]
+
         self.restart_ready = [False, False]
         self.restart_pending = False
 
@@ -117,13 +119,14 @@ class Room:
             "ability_slots": self.ability_slots,
             "own_turn_count": self.own_turn_count,
             "extra_turn_bank": self.extra_turn_bank,
+            "player_names": self.player_names,
             "turn": self.turn,
             "winner": self.winner,
             "players": self.player_count,
             "move_number": self.move_number,
             "restart_ready": self.restart_ready,
             "restart_pending": self.restart_pending,
-            "rules_version": 34,
+            "rules_version": 35,
         }
 
         if extra:
@@ -156,6 +159,24 @@ class Room:
 
         for socket in dead:
             self.remove_socket(socket)
+
+    async def set_player_name(self, player, name):
+        if player not in (0, 1):
+            return
+
+        name = str(name or "").strip()
+        if not name:
+            name = f"Player {player + 1}"
+
+        # Keep UI/protocol names compact and safe.
+        name = name[:20]
+        self.player_names[player] = name
+
+        await self.broadcast({
+            "event": "player_name",
+            "name_player": player,
+            "name": name,
+        })
 
     def yellow_available(self, player):
         return (
