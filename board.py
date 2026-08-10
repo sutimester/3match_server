@@ -10,12 +10,16 @@ class ServerBoard:
     def __init__(self):
         self.grid = self._create_board()
 
-    def _creates_match(self, r, c):
+    def _creates_start_match(self, r, c):
         value = self.grid[r][c]
         return (
-            c >= 2 and self.grid[r][c - 1] == value and self.grid[r][c - 2] == value
+            c >= 2
+            and self.grid[r][c - 1] == value
+            and self.grid[r][c - 2] == value
         ) or (
-            r >= 2 and self.grid[r - 1][c] == value and self.grid[r - 2][c] == value
+            r >= 2
+            and self.grid[r - 1][c] == value
+            and self.grid[r - 2][c] == value
         )
 
     def _create_board(self):
@@ -26,9 +30,17 @@ class ServerBoard:
                 random.shuffle(choices)
                 for value in choices:
                     self.grid[r][c] = value
-                    if not self._creates_match(r, c):
+                    if not self._creates_start_match(r, c):
                         break
         return self.grid
+
+    def load(self, grid):
+        self.grid = [row[:] for row in grid]
+
+    def clone(self):
+        other = ServerBoard.__new__(ServerBoard)
+        other.grid = [row[:] for row in self.grid]
+        return other
 
     @staticmethod
     def adjacent(a, b):
@@ -37,7 +49,10 @@ class ServerBoard:
     def swap(self, a, b):
         r1, c1 = a
         r2, c2 = b
-        self.grid[r1][c1], self.grid[r2][c2] = self.grid[r2][c2], self.grid[r1][c1]
+        self.grid[r1][c1], self.grid[r2][c2] = (
+            self.grid[r2][c2],
+            self.grid[r1][c1],
+        )
 
     def collect_runs(self):
         runs = []
@@ -50,7 +65,11 @@ class ServerBoard:
                 while end < COLS and self.grid[r][end] == value:
                     end += 1
                 if value is not None and end - start >= 3:
-                    runs.append({"dir": "h", "value": value, "cells": [(r, c) for c in range(start, end)]})
+                    runs.append({
+                        "dir": "h",
+                        "value": value,
+                        "cells": [(r, c) for c in range(start, end)],
+                    })
                 start = end
 
         for c in range(COLS):
@@ -61,41 +80,70 @@ class ServerBoard:
                 while end < ROWS and self.grid[end][c] == value:
                     end += 1
                 if value is not None and end - start >= 3:
-                    runs.append({"dir": "v", "value": value, "cells": [(r, c) for r in range(start, end)]})
+                    runs.append({
+                        "dir": "v",
+                        "value": value,
+                        "cells": [(r, c) for r in range(start, end)],
+                    })
                 start = end
 
         return runs
 
-    def expand_specials(self, runs):
+    def _expand_specials(self, runs):
         matched = set()
         specials = []
 
         for run in runs:
             cells = run["cells"]
             value = run["value"]
+            length = len(cells)
+
+            # Az alap egyező kövek mindig eltűnnek.
             matched.update(cells)
 
-            if len(cells) >= 5:
-                # Existing 5+ effect: clear every stone of the matched color.
-                color_cells = {
-                    (r, c)
-                    for r in range(ROWS)
-                    for c in range(COLS)
-                    if self.grid[r][c] == value
-                }
-                matched.update(color_cells)
+            if length >= 6:
+                # 6+ egyezés:
+                # minden azonos színű kő eltűnik a teljes pályáról,
+                # KIVÉVE a szürkét. Szürke 6+ esetén csak maga az
+                # egyezés tűnik el.
+                if value != GRAY:
+                    color_cells = {
+                        (r, c)
+                        for r in range(ROWS)
+                        for c in range(COLS)
+                        if self.grid[r][c] == value
+                    }
+                    matched.update(color_cells)
+                    specials.append({
+                        "kind": "color_clear",
+                        "value": value,
+                        "length": length,
+                    })
+                else:
+                    specials.append({
+                        "kind": "gray_6plus_match",
+                        "value": value,
+                        "length": length,
+                    })
 
-                # Also clear the complete column at the third matched cell.
-                third_cell = cells[2]
-                third_col = third_cell[1]
-                matched.update((r, third_col) for r in range(ROWS))
+            elif length == 5:
+                # 5-ös egyezés:
+                # a match középső kövén átmenő TELJES sor ÉS oszlop eltűnik.
+                middle_r, middle_c = cells[len(cells) // 2]
 
-                specials.append({"kind": "color_clear", "value": value})
+                matched.update((middle_r, c) for c in range(COLS))
+                matched.update((r, middle_c) for r in range(ROWS))
+
                 specials.append({
-                    "kind": "five_column_clear",
-                    "index": third_col,
+                    "kind": "cross_clear",
+                    "row": middle_r,
+                    "column": middle_c,
                 })
-            elif len(cells) == 4:
+
+            elif length == 4:
+                # 4-es egyezés:
+                # vízszintes match -> teljes sor,
+                # függőleges match -> teljes oszlop.
                 if run["dir"] == "h":
                     row = cells[0][0]
                     matched.update((row, c) for c in range(COLS))
@@ -107,9 +155,13 @@ class ServerBoard:
 
         return matched, specials
 
-    def collapse(self):
+    def _collapse(self):
         for c in range(COLS):
-            values = [self.grid[r][c] for r in range(ROWS) if self.grid[r][c] is not None]
+            values = [
+                self.grid[r][c]
+                for r in range(ROWS)
+                if self.grid[r][c] is not None
+            ]
             missing = ROWS - len(values)
             new_col = [random.randrange(6) for _ in range(missing)] + values
             for r in range(ROWS):
@@ -126,11 +178,11 @@ class ServerBoard:
             self.swap(a, b)
             return None
 
+        color_points = [0, 0, 0, 0, 0, 0]
         total_gray = 0
         total_removed = 0
         cascade = 0
         specials = []
-        color_points = [0, 0, 0, 0, 0, 0]
         animation_steps = []
         cascade_color_points = []
         extra_turn = False
@@ -138,43 +190,39 @@ class ServerBoard:
         while runs:
             cascade += 1
 
-            # Any 5+ match made during this move, including cascades,
-            # grants another turn to the player who initiated the move.
-            if any(len(run["cells"]) >= 5 for run in runs):
+            # Bármely valódi 4+ match extra kört ad.
+            if any(len(run["cells"]) >= 4 for run in runs):
                 extra_turn = True
 
-            matched, new_specials = self.expand_specials(runs)
+            matched, new_specials = self._expand_specials(runs)
             specials.extend(new_specials)
 
-            before_grid = [row[:] for row in self.grid] if record_steps else None
+            before = [row[:] for row in self.grid] if record_steps else None
+            step_points = [0, 0, 0, 0, 0, 0]
 
-            # During the whole current turn/chain, EVERY removed non-gray
-            # stone gives +1 point to its own color. Gray is the exception:
-            # it gives no color points and instead damages the opponent by 10.
-            step_color_points = [0, 0, 0, 0, 0, 0]
-
+            # Minden eltűnő nem szürke kő +1 pont.
+            # Minden eltűnő szürke -10 HP az ellenfélnek.
             for r, c in matched:
                 value = self.grid[r][c]
                 if value is None:
                     continue
-
                 if value == GRAY:
                     total_gray += 1
                 else:
                     color_points[value] += 1
-                    step_color_points[value] += 1
+                    step_points[value] += 1
 
-            cascade_color_points.append(step_color_points)
+            cascade_color_points.append(step_points)
             total_removed += len(matched)
 
             for r, c in matched:
                 self.grid[r][c] = None
 
-            self.collapse()
+            self._collapse()
 
             if record_steps:
                 animation_steps.append({
-                    "before": before_grid,
+                    "before": before,
                     "matched": [list(cell) for cell in sorted(matched)],
                     "after": [row[:] for row in self.grid],
                 })
@@ -182,13 +230,30 @@ class ServerBoard:
             runs = self.collect_runs()
 
         return {
-            "damage": total_gray * GRAY_DAMAGE,
+            "color_points": color_points,
             "gray_removed": total_gray,
+            "damage": total_gray * GRAY_DAMAGE,
             "removed": total_removed,
             "cascade": cascade,
             "specials": specials,
-            "color_points": color_points,
             "animation_steps": animation_steps,
             "cascade_color_points": cascade_color_points,
             "extra_turn": extra_turn,
         }
+
+    def valid_moves(self):
+        moves = []
+        for r in range(ROWS):
+            for c in range(COLS):
+                if c + 1 < COLS:
+                    moves.append(((r, c), (r, c + 1)))
+                if r + 1 < ROWS:
+                    moves.append(((r, c), (r + 1, c)))
+
+        valid = []
+        for a, b in moves:
+            clone = self.clone()
+            result = clone.resolve_swap(a, b, record_steps=False)
+            if result is not None:
+                valid.append((a, b, result))
+        return valid

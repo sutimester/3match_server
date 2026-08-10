@@ -12,7 +12,10 @@ class Room:
         self.sockets = []
         self.board = ServerBoard()
         self.hp = [MAX_HP, MAX_HP]
-        self.color_scores = [[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]]
+        self.color_scores = [
+            [0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0],
+        ]
         self.turn = 0
         self.winner = None
 
@@ -23,8 +26,8 @@ class Room:
             "open": len(self.sockets) < 2,
         }
 
-    def state_payload(self, extra=None):
-        payload = {
+    def payload(self, extra=None):
+        data = {
             "type": "state",
             "room": self.code,
             "public": self.public,
@@ -36,45 +39,53 @@ class Room:
             "players": len(self.sockets),
         }
         if extra:
-            payload.update(extra)
-        return payload
+            data.update(extra)
+        return data
 
     async def broadcast(self, extra=None):
-        payload = json.dumps(self.state_payload(extra))
-        stale = []
-
+        raw = json.dumps(self.payload(extra))
+        dead = []
         for socket in self.sockets:
             try:
-                await socket.send(payload)
+                await socket.send(raw)
             except Exception:
-                stale.append(socket)
+                dead.append(socket)
 
-        for socket in stale:
+        for socket in dead:
             if socket in self.sockets:
                 self.sockets.remove(socket)
 
     async def make_move(self, player, a, b):
-        if self.winner is not None or player != self.turn or len(self.sockets) < 2:
+        # A szerver a hiteles körkezelő.
+        if self.winner is not None:
+            return
+        if player != self.turn:
+            return
+        if len(self.sockets) < 2:
             return
 
         result = self.board.resolve_swap(a, b)
         if result is None:
-            await self.broadcast({"event": "invalid", "invalid_player": player})
+            await self.broadcast({
+                "event": "invalid",
+                "invalid_player": player,
+            })
             return
 
         opponent = 1 - player
-        # The player who initiated the move owns every consequence of
-        # that move: all cascades, special clears, points and gray damage.
-        # Only after this complete result is applied may the turn change.
+
         for color_index, points in enumerate(result["color_points"]):
             self.color_scores[player][color_index] += points
+
         self.hp[opponent] = max(0, self.hp[opponent] - result["damage"])
 
         if self.hp[opponent] <= 0:
             self.winner = player
+
+        # FONTOS: 4+ match esetén a kör NEM kerül át.
         elif result.get("extra_turn", False):
-            # 5+ match: the same player starts the next turn.
             self.turn = player
+
         else:
             self.turn = opponent
 
