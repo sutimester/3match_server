@@ -10,7 +10,7 @@ GREEN = 1
 BLUE = 2
 YELLOW = 3
 PURPLE = 4
-ABILITY_COST = 10
+ABILITY_COST = 9
 
 
 class Room:
