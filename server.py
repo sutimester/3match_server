@@ -76,7 +76,7 @@ class Match3Server:
             "room":room.code,
             "room_name":room.display_name or room.code,
             "public":True,
-            "rules_version":43,
+            "rules_version":45,
         }))
 
         await socket.send(json.dumps(
@@ -93,7 +93,7 @@ class Match3Server:
         if p is None:return None
         await socket.send(json.dumps({
             "type":"joined","room":room.code,"room_name":room.display_name or room.code,
-            "player":p,"public":room.public,"rules_version":43
+            "player":p,"public":room.public,"rules_version":45
         }))
         await room.broadcast({"event":"player_joined"})
         return p
@@ -202,7 +202,11 @@ class Match3Server:
                     if room is None or player is None:continue
                     try:a=int(data.get("ability"))
                     except Exception:continue
-                    out=await room.use_ability(player,a)
+                    out=await room.use_ability(
+                        player,
+                        a,
+                        data.get("target_color"),
+                    )
                     if not out["ok"]:await self.send_error(socket,out["reason"].replace("_"," ").title(),out["reason"])
 
                 elif action=="new_game":

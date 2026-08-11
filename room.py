@@ -89,7 +89,7 @@ class Room:
             "player_names":self.player_names,"turn":self.turn,"winner":self.winner,"players":self.player_count,"spectators":self.spectator_count,
             "ability_slots":self.ability_slots,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
-            "rules_version":43,
+            "rules_version":45,
         }
         if extra:data.update(extra)
         return data
@@ -131,7 +131,7 @@ class Room:
         if a==YELLOW and not self.yellow_available(p):return False,"yellow_not_available_this_turn"
         return True,None
 
-    async def use_ability(self,p,a):
+    async def use_ability(self,p,a,target_color=None):
         ok,reason=self.ability_available(p,a)
         if not ok:return {"ok":False,"reason":reason}
         o=1-p
@@ -146,8 +146,49 @@ class Room:
                 self.hp[o]=min(self.hp[o],self.max_hp[o])
                 if self.hp[o]<=0:self.winner=p
             elif a==BLUE:self.max_hp[p]+=5
-            elif a==YELLOW:self.extra_turn_bank[p]+=1
-            elif a==PURPLE:self.ability_slots[p]+=2
+            elif a==YELLOW:
+                self.extra_turn_bank[p]+=1
+
+            elif a==PURPLE:
+                # Purple clears every stone of one player-selected non-gray color.
+                try:
+                    target_color=int(target_color)
+                except Exception:
+                    # Refund because the target is invalid.
+                    self.color_scores[p][a]+=ABILITY_COST
+                    self.ability_slots[p]+=1
+                    return {"ok":False,"reason":"purple_target_required"}
+
+                if target_color < 0 or target_color >= 5:
+                    self.color_scores[p][a]+=ABILITY_COST
+                    self.ability_slots[p]+=1
+                    return {"ok":False,"reason":"invalid_purple_target"}
+
+                result=self.board.clear_selected_color(target_color)
+                if result is None:
+                    self.color_scores[p][a]+=ABILITY_COST
+                    self.ability_slots[p]+=1
+                    return {"ok":False,"reason":"invalid_purple_target"}
+
+                o=1-p
+                for i,v in enumerate(result["color_points"]):
+                    self.color_scores[p][i]+=v
+
+                self.hp[o]=max(0,self.hp[o]-result["damage"])
+                if self.hp[o]<=0:
+                    self.winner=p
+
+                payload={
+                    "event":"ability",
+                    "ability_player":p,
+                    "ability":a,
+                    "target_color":target_color,
+                    "animation_steps":result["animation_steps"],
+                    "specials":result["specials"],
+                    "board_regenerated":result["board_regenerated"],
+                }
+                await self.broadcast(payload)
+                return {"ok":True}
 
         await self.broadcast({"event":"ability","ability_player":p,"ability":a})
         return {"ok":True}

@@ -159,6 +159,114 @@ class ServerBoard:
                     specials.append({"kind":"column_clear","index":col})
         return matched,specials
 
+    def clear_selected_color(self,value,record_steps=True):
+        """Clear every stone of the selected non-gray color, then resolve cascades."""
+        if value is None or value < 0 or value >= GRAY:
+            return None
+
+        matched={(r,c) for r in range(ROWS) for c in range(COLS) if self.grid[r][c] == value}
+        if not matched:
+            return {
+                "color_points":[0]*COLOR_COUNT,
+                "cascade_color_points":[],
+                "gray_removed":0,
+                "damage":0,
+                "removed":0,
+                "cascade":0,
+                "specials":[],
+                "animation_steps":[],
+                "extra_turn":False,
+                "board_regenerated":False,
+            }
+
+        color_points=[0]*COLOR_COUNT
+        cascade_points=[]
+        total_gray=0
+        total_removed=0
+        cascade=0
+        specials=[{"kind":"ability_color_clear","value":value}]
+        steps=[]
+        extra_turn=False
+
+        # Purple ability's directly cleared stones also score for the activating player.
+        before=[row[:] for row in self.grid] if record_steps else None
+        step_points=[0]*COLOR_COUNT
+        for r,c in matched:
+            v=self.grid[r][c]
+            if v == GRAY:
+                total_gray += 1
+            elif v is not None:
+                color_points[v] += 1
+                step_points[v] += 1
+
+        cascade_points.append(step_points)
+        total_removed += len(matched)
+        for r,c in matched:
+            self.grid[r][c]=None
+        self._collapse()
+
+        if record_steps:
+            steps.append({
+                "before":before,
+                "matched":[list(x) for x in sorted(matched)],
+                "after":[row[:] for row in self.grid],
+                "color_points":step_points,
+            })
+
+        runs=self.collect_runs()
+        while runs:
+            cascade += 1
+            if any(len(run["cells"]) >= 4 for run in runs):
+                extra_turn=True
+
+            matched,new_specials=self._expand_specials(runs)
+            specials.extend(new_specials)
+            before=[row[:] for row in self.grid] if record_steps else None
+            step_points=[0]*COLOR_COUNT
+
+            for r,c in matched:
+                v=self.grid[r][c]
+                if v is None:
+                    continue
+                if v == GRAY:
+                    total_gray += 1
+                else:
+                    color_points[v] += 1
+                    step_points[v] += 1
+
+            cascade_points.append(step_points)
+            total_removed += len(matched)
+            for r,c in matched:
+                self.grid[r][c]=None
+            self._collapse()
+
+            if record_steps:
+                steps.append({
+                    "before":before,
+                    "matched":[list(x) for x in sorted(matched)],
+                    "after":[row[:] for row in self.grid],
+                    "color_points":step_points,
+                })
+            runs=self.collect_runs()
+
+        regenerated=False
+        if not self.has_valid_move():
+            self.regenerate_playable()
+            regenerated=True
+
+        return {
+            "color_points":color_points,
+            "cascade_color_points":cascade_points,
+            "gray_removed":total_gray,
+            "damage":total_gray*GRAY_DAMAGE,
+            "removed":total_removed,
+            "cascade":cascade,
+            "specials":specials,
+            "animation_steps":steps,
+            "extra_turn":extra_turn,
+            "board_regenerated":regenerated,
+        }
+
     def _collapse(self):
         for c in range(COLS):
             survivors=[self.grid[r][c] for r in range(ROWS) if self.grid[r][c] is not None]
