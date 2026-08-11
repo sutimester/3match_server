@@ -22,11 +22,14 @@ class Room:
         self.max_hp=[100,100]
         self.color_scores=[[0]*6,[0]*6]
         self.player_names=["Player 1","Player 2"]
-        self.turn=0
+        self.starting_player=0
+        self.turn=self.starting_player
         self.winner=None
         self.move_number=0
-        self.ability_slots=[1,0]
-        self.own_turn_count=[1,0]
+        self.ability_slots=[0,0]
+        self.ability_slots[self.starting_player]=1
+        self.own_turn_count=[0,0]
+        self.own_turn_count[self.starting_player]=1
         self.extra_turn_bank=[0,0]
         self.restart_ready=[False,False]
         self.restart_pending=False
@@ -86,7 +89,7 @@ class Room:
             "player_names":self.player_names,"turn":self.turn,"winner":self.winner,"players":self.player_count,"spectators":self.spectator_count,
             "ability_slots":self.ability_slots,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
-            "rules_version":38,
+            "rules_version":43,
         }
         if extra:data.update(extra)
         return data
@@ -135,11 +138,11 @@ class Room:
         self.color_scores[p][a]-=ABILITY_COST
 
         if a==GREEN:
-            self.hp[p]=min(self.max_hp[p],self.hp[p]+5)
+            self.hp[p]=min(self.max_hp[p],self.hp[p]+15)
         else:
             self.ability_slots[p]-=1
             if a==RED:
-                self.max_hp[o]=max(0,self.max_hp[o]-5)
+                self.max_hp[o]=max(0,self.max_hp[o]-15)
                 self.hp[o]=min(self.hp[o],self.max_hp[o])
                 if self.hp[o]<=0:self.winner=p
             elif a==BLUE:self.max_hp[p]+=5
@@ -199,11 +202,30 @@ class Room:
         await asyncio.sleep(.65)
         if self.player_count<2 or not all(self.restart_ready):self.restart_pending=False;return
         self.board=ServerBoard()
-        self.hp=[100,100];self.max_hp=[100,100];self.color_scores=[[0]*6,[0]*6]
-        self.turn=0;self.winner=None;self.move_number=0
-        self.ability_slots=[1,0];self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
-        self.restart_ready=[False,False];self.restart_pending=False
-        await self.broadcast({"event":"new_game"})
+        self.hp=[100,100]
+        self.max_hp=[100,100]
+        self.color_scores=[[0]*6,[0]*6]
+
+        # Every rematch starts with the player who did NOT start
+        # the previous match.
+        self.starting_player=1-self.starting_player
+        self.turn=self.starting_player
+        self.winner=None
+        self.move_number=0
+
+        self.ability_slots=[0,0]
+        self.ability_slots[self.starting_player]=1
+        self.own_turn_count=[0,0]
+        self.own_turn_count[self.starting_player]=1
+        self.extra_turn_bank=[0,0]
+
+        self.restart_ready=[False,False]
+        self.restart_pending=False
+
+        await self.broadcast({
+            "event":"new_game",
+            "starting_player":self.starting_player,
+        })
 
     async def reset_after_leave(self):
         if self.player_count!=1:return
@@ -213,7 +235,15 @@ class Room:
         self.board=ServerBoard()
         self.hp=[100,100];self.max_hp=[100,100];self.color_scores=[[0]*6,[0]*6]
         self.player_names=[remaining_name,"Player 2"]
-        self.turn=0;self.winner=None;self.move_number=0
-        self.ability_slots=[1,0];self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
-        self.restart_ready=[False,False];self.restart_pending=False
+        self.starting_player=0
+        self.turn=self.starting_player
+        self.winner=None
+        self.move_number=0
+
+        self.ability_slots=[1,0]
+        self.own_turn_count=[1,0]
+        self.extra_turn_bank=[0,0]
+
+        self.restart_ready=[False,False]
+        self.restart_pending=False
         await self.broadcast({"event":"player_left","you_are_now":0})

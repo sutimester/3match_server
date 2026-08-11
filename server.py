@@ -76,7 +76,7 @@ class Match3Server:
             "room":room.code,
             "room_name":room.display_name or room.code,
             "public":True,
-            "rules_version":38,
+            "rules_version":43,
         }))
 
         await socket.send(json.dumps(
@@ -93,7 +93,7 @@ class Match3Server:
         if p is None:return None
         await socket.send(json.dumps({
             "type":"joined","room":room.code,"room_name":room.display_name or room.code,
-            "player":p,"public":room.public,"rules_version":38
+            "player":p,"public":room.public,"rules_version":43
         }))
         await room.broadcast({"event":"player_joined"})
         return p
