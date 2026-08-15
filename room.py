@@ -67,7 +67,7 @@ class Room:
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
             "action_log":self.action_log,
-            "rules_version":66,
+            "rules_version":68,
         }
         if extra:d.update(extra)
         return d
@@ -96,7 +96,15 @@ class Room:
         names=["red","green","blue","yellow","purple"]
         parts=[]
 
-        points=result.get("color_points",[0]*7)
+        chain_steps=result.get("cascade_color_points") or []
+        if chain_steps:
+            points=[
+                sum(int(step[i]) for step in chain_steps)
+                for i in range(7)
+            ]
+        else:
+            points=result.get("color_points",[0]*7)
+
         for i,name in enumerate(names):
             count=int(points[i]) if i<len(points) else 0
             if count:
@@ -167,7 +175,16 @@ class Room:
         """
         o=1-p
 
-        points=result.get("color_points",[0]*7)
+        # Award points from every clear in the complete chain.
+        chain_steps=result.get("cascade_color_points") or []
+        if chain_steps:
+            points=[
+                sum(int(step[i]) for step in chain_steps)
+                for i in range(7)
+            ]
+        else:
+            points=[int(v) for v in result.get("color_points",[0]*7)]
+
         for i,v in enumerate(points):
             self.color_scores[p][i]+=int(v)
 
