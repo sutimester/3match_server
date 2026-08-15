@@ -276,6 +276,15 @@ class ServerBoard:
             self.regenerate_playable()
             regenerated=True
 
+        # Rebuild the awarded color totals from every cascade step.
+        # This guarantees that chain reactions belong to the player who made
+        # the original move and no later cascade can be omitted.
+        if cascade_color_points:
+            total_points=[
+                sum(step[i] for step in cascade_color_points)
+                for i in range(7)
+            ]
+
         return {
             "color_points":total_points,
             "cascade_color_points":cascade_points,

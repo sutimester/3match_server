@@ -90,7 +90,7 @@ class Room:
         for line in lines:
             if line:
                 self.action_log.append(str(line))
-        self.action_log=self.action_log[-6:]
+        self.action_log=self.action_log[-100:]
 
     def _format_removed(self,result):
         names=["red","green","blue","yellow","purple"]
