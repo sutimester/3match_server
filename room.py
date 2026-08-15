@@ -14,8 +14,10 @@ class Room:
         self.code=code;self.public=public;self.display_name=display_name
         self.sockets=[None,None];self.spectators=[]
         self.board=ServerBoard()
-        self.hp=[100,100];self.max_hp=[100,100]
-        self.color_scores=[[0]*6,[0]*6]
+        self.hp=[100,100]
+        self.max_hp=[100,100]
+        self.shield=[0,0]
+        self.color_scores=[[0]*7,[0]*7]
         self.player_names=["Player 1","Player 2"]
         self.starting_player=0;self.turn=0;self.winner=None;self.move_number=0
         self.ability_slots=[1,0];self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
@@ -54,12 +56,12 @@ class Room:
     def state_payload(self,extra=None):
         d={
             "type":"state","room":self.code,"room_name":self.display_name or self.code,"public":self.public,
-            "board":self.board.grid,"hp":self.hp,"max_hp":self.max_hp,"color_scores":self.color_scores,
+            "board":self.board.grid,"hp":self.hp,"max_hp":self.max_hp,"shield":self.shield,"color_scores":self.color_scores,
             "player_names":self.player_names,"starting_player":self.starting_player,
             "turn":self.turn,"winner":self.winner,"players":self.player_count,"spectators":self.spectator_count,
             "ability_slots":self.ability_slots,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
-            "rules_version":46,
+            "rules_version":50,
         }
         if extra:d.update(extra)
         return d
@@ -78,20 +80,35 @@ class Room:
         self.player_names[p]=str(name or "").strip()[:20] or f"Player {p+1}"
         await self.broadcast({"event":"player_name"})
 
+    def _apply_damage(self,target,amount):
+        """Server-authoritative damage: shield first, HP second."""
+        amount=max(0,int(amount))
+
+        absorbed=min(self.shield[target],amount)
+        self.shield[target]-=absorbed
+        amount-=absorbed
+
+        if amount>0:
+            self.hp[target]=max(0,self.hp[target]-amount)
+
+        return absorbed,amount
+
     def _apply_scoring_result(self,p,result):
         """
-        The ONLY online score application path.
-        Board returns final totals; server applies each total exactly once.
+        The ONLY online board-result application path.
+        Includes points, white shield gain and gray damage.
         """
         o=1-p
 
-        points=result.get("color_points",[0]*6)
+        points=result.get("color_points",[0]*7)
         for i,v in enumerate(points):
             self.color_scores[p][i]+=int(v)
 
-        self.hp[o]=max(
-            0,
-            self.hp[o]-int(result.get("damage",0)),
+        self.shield[p]=min(100,self.shield[p]+int(result.get("shield_gain",0)))
+
+        self._apply_damage(
+            o,
+            result.get("damage",0),
         )
 
         if self.hp[o]<=0:
@@ -144,6 +161,8 @@ class Room:
                 "board_regenerated":result["board_regenerated"],
                 "awarded_color_points":result["color_points"],
                 "gray_removed":result["gray_removed"],
+                "white_removed":result.get("white_removed",0),
+                "shield_gain":result.get("shield_gain",0),
             })
             return {"ok":True}
 
@@ -192,7 +211,10 @@ class Room:
 
         payload=dict(result)
         payload.update({
-            "event":"move","mover":p,
+            "event":"move",
+            "mover":p,
+            "move_a":list(a),
+            "move_b":list(b),
             "awarded_color_points":result["color_points"],
         })
         await self.broadcast(payload)
@@ -216,7 +238,10 @@ class Room:
             self.restart_pending=False;return
 
         self.board=ServerBoard()
-        self.hp=[100,100];self.max_hp=[100,100];self.color_scores=[[0]*6,[0]*6]
+        self.hp=[100,100]
+        self.max_hp=[100,100]
+        self.shield=[0,0]
+        self.color_scores=[[0]*7,[0]*7]
         self.starting_player=1-self.starting_player;self.turn=self.starting_player
         self.winner=None;self.move_number=0
         self.ability_slots=[0,0];self.ability_slots[self.starting_player]=1
@@ -231,7 +256,11 @@ class Room:
         old_index=0 if self.sockets[0] is remaining else 1
         name=self.player_names[old_index]
         self.sockets=[remaining,None]
-        self.board=ServerBoard();self.hp=[100,100];self.max_hp=[100,100];self.color_scores=[[0]*6,[0]*6]
+        self.board=ServerBoard()
+        self.hp=[100,100]
+        self.max_hp=[100,100]
+        self.shield=[0,0]
+        self.color_scores=[[0]*7,[0]*7]
         self.player_names=[name,"Player 2"];self.starting_player=0;self.turn=0;self.winner=None;self.move_number=0
         self.ability_slots=[1,0];self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
         self.restart_ready=[False,False];self.restart_pending=False

@@ -2,9 +2,11 @@ import random
 ROWS=8
 COLS=8
 GRAY=5
+WHITE_STONE=6
 GRAY_DAMAGE=10
+WHITE_SHIELD_GAIN=10
 
-COLOR_COUNT=6
+COLOR_COUNT=7
 
 class ServerBoard:
     def __init__(self):
@@ -122,7 +124,7 @@ class ServerBoard:
             matched.update(cells)
 
             if n>=6:
-                if value!=GRAY:
+                if value not in (GRAY,WHITE_STONE):
                     matched.update(
                         (r,c)
                         for r in range(ROWS)
@@ -131,7 +133,11 @@ class ServerBoard:
                     )
                     specials.append({"kind":"color_clear","value":value,"length":n})
                 else:
-                    specials.append({"kind":"gray_6plus_match","value":value,"length":n})
+                    specials.append({
+                        "kind":"gray_like_6plus_match",
+                        "value":value,
+                        "length":n,
+                    })
 
             elif n==5:
                 mr,mc=cells[len(cells)//2]
@@ -165,28 +171,33 @@ class ServerBoard:
 
     def _score_cells(self,cells):
         """
-        The ONE scoring function used by normal matches, specials,
-        cascades and the purple ability.
+        Unified scoring for every clear source.
 
-        Every removed non-gray stone = +1 point of that stone's color.
-        Every removed gray stone = 10 damage and NO collectible point.
-        A cell is scored at most once because callers pass a set.
+        - red/green/blue/yellow/purple: +1 color point each
+        - gray: 10 incoming damage each
+        - white: +10 shield to the acting player each
+        - gray and white never grant collectible color points
         """
         points=[0]*COLOR_COUNT
         gray_removed=0
+        white_removed=0
         removed=0
 
         for r,c in set(cells):
             v=self.grid[r][c]
             if v is None:
                 continue
+
             removed+=1
+
             if v==GRAY:
                 gray_removed+=1
+            elif v==WHITE_STONE:
+                white_removed+=1
             else:
                 points[v]+=1
 
-        return points,gray_removed,removed
+        return points,gray_removed,white_removed,removed
 
     @staticmethod
     def _add_points(total,step):
@@ -195,7 +206,7 @@ class ServerBoard:
 
     def _clear_cells(self,matched,record_steps):
         before=[row[:] for row in self.grid] if record_steps else None
-        step_points,gray_removed,removed=self._score_cells(matched)
+        step_points,gray_removed,white_removed,removed=self._score_cells(matched)
 
         for r,c in matched:
             self.grid[r][c]=None
@@ -210,9 +221,10 @@ class ServerBoard:
                 "after":[row[:] for row in self.grid],
                 "color_points":step_points[:],
                 "gray_removed":gray_removed,
+                "white_removed":white_removed,
             }
 
-        return step_points,gray_removed,removed,step
+        return step_points,gray_removed,white_removed,removed,step
 
     def _resolve_after_initial_clear(
         self,
@@ -224,16 +236,18 @@ class ServerBoard:
         total_points=[0]*COLOR_COUNT
         cascade_points=[]
         total_gray=0
+        total_white=0
         total_removed=0
         specials=list(initial_specials or [])
         steps=[]
         cascade=0
         extra_turn=False
 
-        p,g,n,step=self._clear_cells(initial_matched,record_steps)
+        p,g,w,n,step=self._clear_cells(initial_matched,record_steps)
         self._add_points(total_points,p)
         cascade_points.append(p)
         total_gray+=g
+        total_white+=w
         total_removed+=n
         if step:steps.append(step)
 
@@ -247,10 +261,11 @@ class ServerBoard:
             matched,new_specials=self._expand_specials(runs)
             specials.extend(new_specials)
 
-            p,g,n,step=self._clear_cells(matched,record_steps)
+            p,g,w,n,step=self._clear_cells(matched,record_steps)
             self._add_points(total_points,p)
             cascade_points.append(p)
             total_gray+=g
+            total_white+=w
             total_removed+=n
             if step:steps.append(step)
 
@@ -265,7 +280,9 @@ class ServerBoard:
             "color_points":total_points,
             "cascade_color_points":cascade_points,
             "gray_removed":total_gray,
+            "white_removed":total_white,
             "damage":total_gray*GRAY_DAMAGE,
+            "shield_gain":total_white*WHITE_SHIELD_GAIN,
             "removed":total_removed,
             "cascade":cascade,
             "specials":specials,
@@ -317,7 +334,9 @@ class ServerBoard:
                 "color_points":[0]*COLOR_COUNT,
                 "cascade_color_points":[],
                 "gray_removed":0,
+                "white_removed":0,
                 "damage":0,
+                "shield_gain":0,
                 "removed":0,
                 "cascade":0,
                 "specials":[{"kind":"ability_color_clear","value":value}],

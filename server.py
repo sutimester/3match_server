@@ -46,7 +46,7 @@ class Match3Server:
         if p is None:return None
         await s.send(json.dumps({
             "type":"joined","room":room.code,"room_name":room.display_name or room.code,
-            "player":p,"public":room.public,"rules_version":46
+            "player":p,"public":room.public,"rules_version":50
         }))
         await room.broadcast({"event":"player_joined"})
         return p
@@ -57,7 +57,7 @@ class Match3Server:
         room.add_spectator(s)
         await s.send(json.dumps({
             "type":"spectating","room":room.code,"room_name":room.display_name or room.code,
-            "public":True,"rules_version":46
+            "public":True,"rules_version":50
         }))
         await s.send(json.dumps(room.state_payload({"event":"spectator_joined","spectator_mode":True})))
         return True
