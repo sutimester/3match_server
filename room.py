@@ -20,7 +20,11 @@ class Room:
         self.color_scores=[[0]*7,[0]*7]
         self.player_names=["Player 1","Player 2"]
         self.starting_player=0;self.turn=0;self.winner=None;self.move_number=0
-        self.ability_slots=[1,0];self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
+        self.ability_used=[
+            [False,False,False,False,False],
+            [False,False,False,False,False],
+        ]
+        self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
         self.restart_ready=[False,False];self.restart_pending=False
         self.action_log=[]
 
@@ -60,10 +64,10 @@ class Room:
             "board":self.board.grid,"hp":self.hp,"max_hp":self.max_hp,"shield":self.shield,"color_scores":self.color_scores,
             "player_names":self.player_names,"starting_player":self.starting_player,
             "turn":self.turn,"winner":self.winner,"players":self.player_count,"spectators":self.spectator_count,
-            "ability_slots":self.ability_slots,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
+            "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
             "action_log":self.action_log,
-            "rules_version":51,
+            "rules_version":52,
         }
         if extra:d.update(extra)
         return d
@@ -187,9 +191,18 @@ class Room:
         if p!=self.turn:return False,"not_your_turn"
         if a not in (RED,GREEN,BLUE,YELLOW,PURPLE):return False,"invalid_ability"
         if self.color_scores[p][a]<ABILITY_COST:return False,"not_enough_points"
-        if a==GREEN:return ((False,"hp_already_full") if self.hp[p]>=self.max_hp[p] else (True,None))
-        if self.ability_slots[p]<=0:return False,"ability_limit_reached"
-        if a==YELLOW and not self.yellow_available(p):return False,"yellow_not_available_this_turn"
+        if a==GREEN:
+            return (
+                (False,"hp_already_full")
+                if self.hp[p]>=self.max_hp[p]
+                else (True,None)
+            )
+
+        if self.ability_used[p][a]:
+            return False,"ability_already_used_this_turn"
+
+        if a==YELLOW and not self.yellow_available(p):
+            return False,"yellow_not_available_this_turn"
         return True,None
 
     async def use_ability(self,p,a,target_color=None):
@@ -205,12 +218,12 @@ class Room:
 
             # Spend only after target validation.
             self.color_scores[p][PURPLE]-=ABILITY_COST
-            self.ability_slots[p]-=1
+            self.ability_used[p][PURPLE]=True
 
             result=self.board.clear_selected_color(target_color)
             if result is None:
                 self.color_scores[p][PURPLE]+=ABILITY_COST
-                self.ability_slots[p]+=1
+                self.ability_used[p][PURPLE]=False
                 return {"ok":False,"reason":"invalid_purple_target"}
 
             # Purple uses the exact same scoring application as a board move.
@@ -252,7 +265,8 @@ class Room:
         if a==GREEN:
             self.hp[p]=min(self.max_hp[p],self.hp[p]+15)
         else:
-            self.ability_slots[p]-=1
+            self.ability_used[p][a]=True
+
             if a==RED:
                 self.max_hp[o]=max(0,self.max_hp[o]-15)
                 self.hp[o]=min(self.hp[o],self.max_hp[o])
@@ -288,7 +302,11 @@ class Room:
         return {"ok":True}
 
     def _begin_turn(self,p):
-        self.turn=p;self.ability_slots=[0,0];self.ability_slots[p]=1;self.own_turn_count[p]+=1
+        self.turn=p
+        self.ability_used[p]=[
+            False,False,False,False,False
+        ]
+        self.own_turn_count[p]+=1
 
     def _resolve_next_turn(self,p,extra):
         if extra:self.extra_turn_bank[p]+=1
@@ -367,7 +385,10 @@ class Room:
         self.color_scores=[[0]*7,[0]*7]
         self.starting_player=1-self.starting_player;self.turn=self.starting_player
         self.winner=None;self.move_number=0
-        self.ability_slots=[0,0];self.ability_slots[self.starting_player]=1
+        self.ability_used=[
+            [False,False,False,False,False],
+            [False,False,False,False,False],
+        ]
         self.own_turn_count=[0,0];self.own_turn_count[self.starting_player]=1
         self.extra_turn_bank=[0,0]
         self.restart_ready=[False,False]
@@ -389,7 +410,11 @@ class Room:
         self.shield=[0,0]
         self.color_scores=[[0]*7,[0]*7]
         self.player_names=[name,"Player 2"];self.starting_player=0;self.turn=0;self.winner=None;self.move_number=0
-        self.ability_slots=[1,0];self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
+        self.ability_used=[
+            [False,False,False,False,False],
+            [False,False,False,False,False],
+        ]
+        self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
         self.restart_ready=[False,False]
         self.restart_pending=False
         self.action_log=["Opponent left the match."]
