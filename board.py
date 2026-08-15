@@ -279,9 +279,9 @@ class ServerBoard:
         # Rebuild the awarded color totals from every cascade step.
         # This guarantees that chain reactions belong to the player who made
         # the original move and no later cascade can be omitted.
-        if cascade_color_points:
+        if cascade_points:
             total_points=[
-                sum(step[i] for step in cascade_color_points)
+                sum(step[i] for step in cascade_points)
                 for i in range(7)
             ]
 
