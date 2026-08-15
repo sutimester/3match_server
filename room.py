@@ -67,7 +67,7 @@ class Room:
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
             "action_log":self.action_log,
-            "rules_version":68,
+            "rules_version":69,
         }
         if extra:d.update(extra)
         return d
@@ -120,6 +120,36 @@ class Room:
 
         return ", ".join(parts) if parts else "no stones"
 
+    def _format_chain_step(self,step):
+        names=["red","green","blue","yellow","purple"]
+        parts=[]
+
+        points=step.get("color_points",[0]*7)
+        for i,name in enumerate(names):
+            count=int(points[i]) if i<len(points) else 0
+            if count:
+                parts.append(f"{count} {name}")
+
+        gray=int(step.get("gray_removed",0))
+        white=int(step.get("white_removed",0))
+
+        if gray:
+            parts.append(f"{gray} gray")
+        if white:
+            parts.append(f"{white} white")
+
+        return ", ".join(parts) if parts else "no stones"
+
+    def _chain_effect_text(self,result):
+        steps=result.get("animation_steps",[])
+        if len(steps)<=1:
+            return []
+
+        return [
+            f"Chain {index}: {self._format_chain_step(step)}"
+            for index,step in enumerate(steps[1:],start=1)
+        ]
+
     def _make_result_log(self,p,result,shield_before_enemy,hp_before_enemy,shield_before_self):
         player_name=self.player_names[p]
         enemy=1-p
@@ -152,7 +182,17 @@ class Room:
         if result.get("board_regenerated"):
             effects.append("new playable board generated")
 
-        line2="Effect: "+(", ".join(effects) if effects else "no HP/shield effect")+"."
+        # Include exactly what disappeared in every cascade after the initial clear.
+        effects.extend(
+            self._chain_effect_text(result)
+        )
+
+        line2="Effect: "+(
+            "; ".join(effects)
+            if effects
+            else "no HP/shield effect"
+        )+"."
+
         return line1,line2
 
     def _apply_damage(self,target,amount):
