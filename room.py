@@ -22,6 +22,7 @@ class Room:
         self.starting_player=0;self.turn=0;self.winner=None;self.move_number=0
         self.ability_slots=[1,0];self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
         self.restart_ready=[False,False];self.restart_pending=False
+        self.action_log=[]
 
     @property
     def player_count(self):return sum(1 for s in self.sockets if s is not None)
@@ -61,7 +62,8 @@ class Room:
             "turn":self.turn,"winner":self.winner,"players":self.player_count,"spectators":self.spectator_count,
             "ability_slots":self.ability_slots,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
-            "rules_version":50,
+            "action_log":self.action_log,
+            "rules_version":51,
         }
         if extra:d.update(extra)
         return d
@@ -79,6 +81,67 @@ class Room:
     async def set_player_name(self,p,name):
         self.player_names[p]=str(name or "").strip()[:20] or f"Player {p+1}"
         await self.broadcast({"event":"player_name"})
+
+    def _push_log(self,*lines):
+        for line in lines:
+            if line:
+                self.action_log.append(str(line))
+        self.action_log=self.action_log[-6:]
+
+    def _format_removed(self,result):
+        names=["red","green","blue","yellow","purple"]
+        parts=[]
+
+        points=result.get("color_points",[0]*7)
+        for i,name in enumerate(names):
+            count=int(points[i]) if i<len(points) else 0
+            if count:
+                parts.append(f"{count} {name}")
+
+        gray=int(result.get("gray_removed",0))
+        white=int(result.get("white_removed",0))
+
+        if gray:
+            parts.append(f"{gray} gray")
+        if white:
+            parts.append(f"{white} white")
+
+        return ", ".join(parts) if parts else "no stones"
+
+    def _make_result_log(self,p,result,shield_before_enemy,hp_before_enemy,shield_before_self):
+        player_name=self.player_names[p]
+        enemy=1-p
+
+        removed=self._format_removed(result)
+        line1=f"{player_name}: removed {removed}."
+
+        effects=[]
+
+        points=result.get("color_points",[0]*7)
+        collectible=sum(int(points[i]) for i in range(min(5,len(points))))
+        if collectible:
+            effects.append(f"+{collectible} color points")
+
+        shield_gain=max(0,self.shield[p]-shield_before_self)
+        if shield_gain:
+            effects.append(f"+{shield_gain} shield")
+
+        shield_loss=max(0,shield_before_enemy-self.shield[enemy])
+        hp_loss=max(0,hp_before_enemy-self.hp[enemy])
+
+        if shield_loss:
+            effects.append(f"{self.player_names[enemy]} shield -{shield_loss}")
+        if hp_loss:
+            effects.append(f"{self.player_names[enemy]} HP -{hp_loss}")
+
+        if result.get("extra_turn"):
+            effects.append("extra turn")
+
+        if result.get("board_regenerated"):
+            effects.append("new playable board generated")
+
+        line2="Effect: "+(", ".join(effects) if effects else "no HP/shield effect")+"."
+        return line1,line2
 
     def _apply_damage(self,target,amount):
         """Server-authoritative damage: shield first, HP second."""
@@ -151,7 +214,25 @@ class Room:
                 return {"ok":False,"reason":"invalid_purple_target"}
 
             # Purple uses the exact same scoring application as a board move.
+            enemy=1-p
+            shield_before_enemy=self.shield[enemy]
+            hp_before_enemy=self.hp[enemy]
+            shield_before_self=self.shield[p]
+
             self._apply_scoring_result(p,result)
+
+            line1,line2=self._make_result_log(
+                p,
+                result,
+                shield_before_enemy,
+                hp_before_enemy,
+                shield_before_self,
+            )
+            self._push_log(
+                f"{self.player_names[p]} used PURPLE.",
+                line1,
+                line2,
+            )
 
             await self.broadcast({
                 "event":"ability","ability_player":p,"ability":PURPLE,
@@ -179,6 +260,30 @@ class Room:
             elif a==BLUE:self.max_hp[p]+=5
             elif a==YELLOW:self.extra_turn_bank[p]+=1
 
+        ability_names={
+            RED:"RED",
+            GREEN:"GREEN",
+            BLUE:"BLUE",
+            YELLOW:"YELLOW",
+        }
+
+        if a==RED:
+            self._push_log(
+                f"{self.player_names[p]} used RED: {self.player_names[o]} max HP -15."
+            )
+        elif a==GREEN:
+            self._push_log(
+                f"{self.player_names[p]} used GREEN: healed up to +15 HP."
+            )
+        elif a==BLUE:
+            self._push_log(
+                f"{self.player_names[p]} used BLUE: max HP +5."
+            )
+        elif a==YELLOW:
+            self._push_log(
+                f"{self.player_names[p]} used YELLOW: gained an extra turn."
+            )
+
         await self.broadcast({"event":"ability","ability_player":p,"ability":a})
         return {"ok":True}
 
@@ -199,11 +304,29 @@ class Room:
 
         result=self.board.resolve_swap(a,b)
         if result is None:
+            self._push_log(
+                f"{self.player_names[p]}: invalid move - no match."
+            )
             await self.broadcast({"event":"invalid","invalid_player":p})
             return {"ok":False,"reason":"no_match"}
 
+        enemy=1-p
+        shield_before_enemy=self.shield[enemy]
+        hp_before_enemy=self.hp[enemy]
+        shield_before_self=self.shield[p]
+
         # Exactly one authoritative scoring application.
         self._apply_scoring_result(p,result)
+
+        line1,line2=self._make_result_log(
+            p,
+            result,
+            shield_before_enemy,
+            hp_before_enemy,
+            shield_before_self,
+        )
+        self._push_log(line1,line2)
+
         self.move_number+=1
 
         if self.winner is None:
@@ -247,7 +370,11 @@ class Room:
         self.ability_slots=[0,0];self.ability_slots[self.starting_player]=1
         self.own_turn_count=[0,0];self.own_turn_count[self.starting_player]=1
         self.extra_turn_bank=[0,0]
-        self.restart_ready=[False,False];self.restart_pending=False
+        self.restart_ready=[False,False]
+        self.restart_pending=False
+        self.action_log=[
+            f"New game. {self.player_names[self.starting_player]} starts."
+        ]
         await self.broadcast({"event":"new_game","starting_player":self.starting_player})
 
     async def reset_after_leave(self):
@@ -263,5 +390,7 @@ class Room:
         self.color_scores=[[0]*7,[0]*7]
         self.player_names=[name,"Player 2"];self.starting_player=0;self.turn=0;self.winner=None;self.move_number=0
         self.ability_slots=[1,0];self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
-        self.restart_ready=[False,False];self.restart_pending=False
+        self.restart_ready=[False,False]
+        self.restart_pending=False
+        self.action_log=["Opponent left the match."]
         await self.broadcast({"event":"player_left","you_are_now":0})
