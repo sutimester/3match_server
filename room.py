@@ -67,7 +67,7 @@ class Room:
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
             "action_log":self.action_log,
-            "rules_version":69,
+            "rules_version":76,
         }
         if extra:d.update(extra)
         return d
@@ -239,7 +239,8 @@ class Room:
             self.winner=p
 
     def yellow_available(self,p):
-        return self.own_turn_count[p]>0 and self.own_turn_count[p]%2==0
+        # Once per normal own turn; unavailable during any extra turn.
+        return not self.is_extra_turn[p]
 
     def ability_available(self,p,a):
         if p not in (0,1):return False,"invalid_player"
@@ -358,19 +359,22 @@ class Room:
         await self.broadcast({"event":"ability","ability_player":p,"ability":a})
         return {"ok":True}
 
-    def _begin_turn(self,p):
+    def _begin_turn(self,p,extra_turn=False):
         self.turn=p
         self.ability_used[p]=[
             False,False,False,False,False
         ]
-        self.own_turn_count[p]+=1
+        self.is_extra_turn=[False,False]
+        self.is_extra_turn[p]=bool(extra_turn)
+        if not extra_turn:
+            self.own_turn_count[p]+=1
 
     def _resolve_next_turn(self,p,extra):
         if extra:self.extra_turn_bank[p]+=1
         if self.extra_turn_bank[p]>0:
             self.extra_turn_bank[p]-=1
-            return p
-        return 1-p
+            return (p,True)
+        return (1-p,False)
 
     async def make_move(self,p,a,b):
         if self.winner is not None:return {"ok":False,"reason":"game_over"}
@@ -405,7 +409,8 @@ class Room:
         self.move_number+=1
 
         if self.winner is None:
-            self._begin_turn(self._resolve_next_turn(p,result.get("extra_turn",False)))
+            next_player,is_extra=self._resolve_next_turn(p,result.get("extra_turn",False))
+            self._begin_turn(next_player,is_extra)
 
         payload=dict(result)
         payload.update({
@@ -448,6 +453,7 @@ class Room:
         ]
         self.own_turn_count=[0,0];self.own_turn_count[self.starting_player]=1
         self.extra_turn_bank=[0,0]
+        self.is_extra_turn=[False,False]
         self.restart_ready=[False,False]
         self.restart_pending=False
         self.action_log=[
