@@ -8,6 +8,37 @@ WHITE_SHIELD_GAIN=10
 
 COLOR_COUNT=7
 
+GRAY4=7
+GRAY5=8
+GRAY6=9
+WHITE4=10
+WHITE5=11
+WHITE6=12
+
+def base_color(value):
+    if value in (GRAY4,GRAY5,GRAY6):
+        return GRAY
+    if value in (WHITE4,WHITE5,WHITE6):
+        return WHITE_STONE
+    return value
+
+def special_number(value):
+    if value in (GRAY4,WHITE4):
+        return 4
+    if value in (GRAY5,WHITE5):
+        return 5
+    if value in (GRAY6,WHITE6):
+        return 6
+    return None
+
+def make_numbered_special(color,length):
+    length=max(4,min(6,int(length)))
+    if color==GRAY:
+        return {4:GRAY4,5:GRAY5,6:GRAY6}[length]
+    if color==WHITE_STONE:
+        return {4:WHITE4,5:WHITE5,6:WHITE6}[length]
+    return color
+
 class ServerBoard:
     def __init__(self):
         self.grid=[[0]*COLS for _ in range(ROWS)]
@@ -43,9 +74,13 @@ class ServerBoard:
     def _creates_start_match(self,r,c):
         v=self.grid[r][c]
         return (
-            c>=2 and self.grid[r][c-1]==v and self.grid[r][c-2]==v
+            c>=2
+            and base_color(self.grid[r][c-1])==base_color(v)
+            and base_color(self.grid[r][c-2])==base_color(v)
         ) or (
-            r>=2 and self.grid[r-1][c]==v and self.grid[r-2][c]==v
+            r>=2
+            and base_color(self.grid[r-1][c])==base_color(v)
+            and base_color(self.grid[r-2][c])==base_color(v)
         )
 
     def _generate_without_matches(self):
@@ -70,8 +105,11 @@ class ServerBoard:
         for r in range(ROWS):
             s=0
             while s<COLS:
-                v=self.grid[r][s];e=s+1
-                while e<COLS and self.grid[r][e]==v:e+=1
+                raw=self.grid[r][s]
+                v=base_color(raw)
+                e=s+1
+                while e<COLS and base_color(self.grid[r][e])==v:
+                    e+=1
                 if v is not None and e-s>=3:
                     runs.append({"dir":"h","value":v,"cells":[(r,c) for c in range(s,e)]})
                 s=e
@@ -79,8 +117,11 @@ class ServerBoard:
         for c in range(COLS):
             s=0
             while s<ROWS:
-                v=self.grid[s][c];e=s+1
-                while e<ROWS and self.grid[e][c]==v:e+=1
+                raw=self.grid[s][c]
+                v=base_color(raw)
+                e=s+1
+                while e<ROWS and base_color(self.grid[e][c])==v:
+                    e+=1
                 if v is not None and e-s>=3:
                     runs.append({"dir":"v","value":v,"cells":[(r,c) for r in range(s,e)]})
                 s=e
@@ -113,7 +154,7 @@ class ServerBoard:
                         out.append((a,b,sim.resolve_swap(a,b,record_steps=False)))
         return out
 
-    def _expand_specials(self,runs):
+    def _expand_specials(self,runs,preferred_special_cell=None):
         matched=set()
         specials=[]
 
@@ -123,21 +164,30 @@ class ServerBoard:
             n=len(cells)
             matched.update(cells)
 
-            if n>=6:
-                if value not in (GRAY,WHITE_STONE):
-                    matched.update(
-                        (r,c)
-                        for r in range(ROWS)
-                        for c in range(COLS)
-                        if self.grid[r][c]==value
-                    )
-                    specials.append({"kind":"color_clear","value":value,"length":n})
+            # Gray/white 4+ never expands into row/column/full-color clears.
+            # It creates a numbered stone of the same base color instead.
+            if value in (GRAY,WHITE_STONE) and n>=4:
+                number=min(6,n)
+                if preferred_special_cell in cells:
+                    target=preferred_special_cell
                 else:
-                    specials.append({
-                        "kind":"gray_like_6plus_match",
-                        "value":value,
-                        "length":n,
-                    })
+                    target=cells[len(cells)//2]
+                specials.append({
+                    "kind":"numbered_special",
+                    "value":value,
+                    "number":number,
+                    "cell":list(target),
+                })
+                continue
+
+            if n>=6:
+                matched.update(
+                    (r,c)
+                    for r in range(ROWS)
+                    for c in range(COLS)
+                    if base_color(self.grid[r][c])==value
+                )
+                specials.append({"kind":"color_clear","value":value,"length":n})
 
             elif n==5:
                 mr,mc=cells[len(cells)//2]
@@ -171,45 +221,62 @@ class ServerBoard:
 
     def _score_cells(self,cells):
         """
-        Unified scoring for every clear source.
-
-        - red/green/blue/yellow/purple: +1 color point each
-        - gray: 10 incoming damage each
-        - white: +10 shield to the acting player each
-        - gray and white never grant collectible color points
+        Unified scoring/effects. Numbered gray/white stones have weighted value:
+        4 -> 40, 5 -> 50, 6 -> 60.
         """
         points=[0]*COLOR_COUNT
         gray_removed=0
         white_removed=0
+        gray_value=0
+        white_value=0
         removed=0
 
         for r,c in set(cells):
-            v=self.grid[r][c]
-            if v is None:
+            raw=self.grid[r][c]
+            if raw is None:
                 continue
 
             removed+=1
+            v=base_color(raw)
+            number=special_number(raw)
 
             if v==GRAY:
                 gray_removed+=1
+                gray_value+=(number*10 if number else 10)
             elif v==WHITE_STONE:
                 white_removed+=1
+                white_value+=(number*10 if number else 10)
             else:
                 points[v]+=1
 
-        return points,gray_removed,white_removed,removed
+        return points,gray_removed,white_removed,removed,gray_value,white_value
 
     @staticmethod
     def _add_points(total,step):
         for i,v in enumerate(step):
             total[i]+=v
 
-    def _clear_cells(self,matched,record_steps):
+    def _clear_cells(self,matched,record_steps,specials=None):
         before=[row[:] for row in self.grid] if record_steps else None
-        step_points,gray_removed,white_removed,removed=self._score_cells(matched)
+        (
+            step_points,gray_removed,white_removed,removed,gray_value,white_value
+        )=self._score_cells(matched)
+
+        creations=[]
+        for sp in (specials or []):
+            if sp.get("kind")=="numbered_special":
+                creations.append((
+                    tuple(sp["cell"]),
+                    make_numbered_special(sp["value"],sp["number"]),
+                ))
 
         for r,c in matched:
             self.grid[r][c]=None
+
+        # The matched stone at the creation cell is fully scored as removed,
+        # then replaced by the new numbered stone at that swap/match position.
+        for (r,c),value in creations:
+            self.grid[r][c]=value
 
         self._collapse()
 
@@ -222,9 +289,14 @@ class ServerBoard:
                 "color_points":step_points[:],
                 "gray_removed":gray_removed,
                 "white_removed":white_removed,
+                "gray_value":gray_value,
+                "white_value":white_value,
+                "specials":list(specials or []),
             }
 
-        return step_points,gray_removed,white_removed,removed,step
+        return (
+            step_points,gray_removed,white_removed,removed,step,gray_value,white_value
+        )
 
     def _resolve_after_initial_clear(
         self,
@@ -238,17 +310,21 @@ class ServerBoard:
         total_gray=0
         total_white=0
         total_removed=0
+        total_gray_value=0
+        total_white_value=0
         specials=list(initial_specials or [])
         steps=[]
         cascade=0
         extra_turn=False
 
-        p,g,w,n,step=self._clear_cells(initial_matched,record_steps)
+        p,g,w,n,step,gv,wv=self._clear_cells(initial_matched,record_steps,initial_specials)
         self._add_points(total_points,p)
         cascade_points.append(p)
         total_gray+=g
         total_white+=w
         total_removed+=n
+        total_gray_value+=gv
+        total_white_value+=wv
         if step:steps.append(step)
 
         runs=self.collect_runs()
@@ -261,12 +337,14 @@ class ServerBoard:
             matched,new_specials=self._expand_specials(runs)
             specials.extend(new_specials)
 
-            p,g,w,n,step=self._clear_cells(matched,record_steps)
+            p,g,w,n,step,gv,wv=self._clear_cells(matched,record_steps,new_specials)
             self._add_points(total_points,p)
             cascade_points.append(p)
             total_gray+=g
             total_white+=w
             total_removed+=n
+            total_gray_value+=gv
+            total_white_value+=wv
             if step:steps.append(step)
 
             runs=self.collect_runs()
@@ -290,8 +368,10 @@ class ServerBoard:
             "cascade_color_points":cascade_points,
             "gray_removed":total_gray,
             "white_removed":total_white,
-            "damage":total_gray*GRAY_DAMAGE,
-            "shield_gain":total_white*WHITE_SHIELD_GAIN,
+            "damage":total_gray_value,
+            "shield_gain":total_white_value,
+            "gray_value":total_gray_value,
+            "white_value":total_white_value,
             "removed":total_removed,
             "cascade":cascade,
             "specials":specials,
@@ -313,7 +393,15 @@ class ServerBoard:
 
         # The initial match may itself grant an extra turn.
         initial_extra=any(len(run["cells"])>=4 for run in runs)
-        matched,specials=self._expand_specials(runs)
+        preferred=None
+        for candidate in (b,a):
+            if any(candidate in run["cells"] for run in runs):
+                preferred=candidate
+                break
+        matched,specials=self._expand_specials(
+            runs,
+            preferred_special_cell=preferred,
+        )
 
         result=self._resolve_after_initial_clear(
             matched,
@@ -335,7 +423,7 @@ class ServerBoard:
             (r,c)
             for r in range(ROWS)
             for c in range(COLS)
-            if self.grid[r][c]==value
+            if base_color(self.grid[r][c])==value
         }
 
         if not matched:
@@ -346,6 +434,8 @@ class ServerBoard:
                 "white_removed":0,
                 "damage":0,
                 "shield_gain":0,
+                "gray_value":0,
+                "white_value":0,
                 "removed":0,
                 "cascade":0,
                 "specials":[{"kind":"ability_color_clear","value":value}],
