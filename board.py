@@ -190,11 +190,12 @@ class ServerBoard:
 
     def _detect_t5(self,runs):
         """
-        Detect an upright or inverted T made from exactly five normal colored
-        stones: a horizontal 3-run and a vertical 3-run of the same color.
+        Detect a T made from exactly five normal colored stones in any of
+        the four orientations: up, down, left or right.
 
-        The intersection must be the middle of the horizontal bar and one end
-        of the vertical stem. This excludes + shapes and sideways T shapes.
+        It consists of one horizontal 3-run and one vertical 3-run of the
+        same color. Their single intersection must be the middle of one run
+        and an endpoint of the other. This excludes + shapes.
 
         Called only for the player's direct swap, never for cascades.
         """
@@ -212,8 +213,6 @@ class ServerBoard:
         ]
 
         for h in horizontals:
-            hmid=h["cells"][1]
-
             for v in verticals:
                 if v["value"]!=h["value"]:
                     continue
@@ -223,16 +222,23 @@ class ServerBoard:
                     continue
 
                 intersection=next(iter(common))
-
-                if intersection!=hmid:
-                    continue
-
-                # Stem meets the bar at the top or bottom endpoint.
-                if intersection not in (v["cells"][0],v["cells"][-1]):
-                    continue
-
                 union=set(h["cells"]) | set(v["cells"])
+
                 if len(union)!=5:
+                    continue
+
+                h_mid=h["cells"][1]
+                v_mid=v["cells"][1]
+                h_end=intersection in (h["cells"][0],h["cells"][-1])
+                v_end=intersection in (v["cells"][0],v["cells"][-1])
+
+                # Up/down T: middle of horizontal bar + endpoint of vertical stem.
+                vertical_t=(intersection==h_mid and v_end)
+
+                # Left/right T: endpoint of horizontal stem + middle of vertical bar.
+                horizontal_t=(h_end and intersection==v_mid)
+
+                if not (vertical_t or horizontal_t):
                     continue
 
                 return {

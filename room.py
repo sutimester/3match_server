@@ -67,7 +67,7 @@ class Room:
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
             "action_log":self.action_log,
-            "rules_version":84,
+            "rules_version":85,
         }
         if extra:d.update(extra)
         return d
