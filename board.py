@@ -14,6 +14,7 @@ GRAY6=9
 WHITE4=10
 WHITE5=11
 WHITE6=12
+MULTICOLOR=13
 
 def base_color(value):
     if value in (GRAY4,GRAY5,GRAY6):
@@ -127,16 +128,50 @@ class ServerBoard:
                 s=e
         return runs
 
+    def _direct_move_creates_match(self,a,b):
+        if not self.adjacent(a,b):
+            return False
+
+        ar,ac=a
+        br,bc=b
+        raw_a=self.grid[ar][ac]
+        raw_b=self.grid[br][bc]
+
+        wildcard_target=None
+        wildcard_after=None
+
+        if raw_a==MULTICOLOR and base_color(raw_b) in range(5):
+            wildcard_target=base_color(raw_b)
+            wildcard_after=b
+        elif raw_b==MULTICOLOR and base_color(raw_a) in range(5):
+            wildcard_target=base_color(raw_a)
+            wildcard_after=a
+
+        self.swap(a,b)
+
+        if wildcard_after is not None:
+            wr,wc=wildcard_after
+            self.grid[wr][wc]=wildcard_target
+
+        runs=self.collect_runs()
+
+        if wildcard_after is not None:
+            ok=any(wildcard_after in run["cells"] for run in runs)
+        else:
+            ok=bool(runs)
+
+        self.grid[ar][ac]=raw_a
+        self.grid[br][bc]=raw_b
+        return ok
+
     def has_valid_move(self):
         for r in range(ROWS):
             for c in range(COLS):
                 for b in ((r,c+1),(r+1,c)):
-                    if b[0]>=ROWS or b[1]>=COLS:continue
-                    a=(r,c)
-                    self.swap(a,b)
-                    ok=bool(self.collect_runs())
-                    self.swap(a,b)
-                    if ok:return True
+                    if b[0]>=ROWS or b[1]>=COLS:
+                        continue
+                    if self._direct_move_creates_match((r,c),b):
+                        return True
         return False
 
     def valid_moves(self):
@@ -144,15 +179,69 @@ class ServerBoard:
         for r in range(ROWS):
             for c in range(COLS):
                 for b in ((r,c+1),(r+1,c)):
-                    if b[0]>=ROWS or b[1]>=COLS:continue
+                    if b[0]>=ROWS or b[1]>=COLS:
+                        continue
                     a=(r,c)
-                    self.swap(a,b)
-                    ok=bool(self.collect_runs())
-                    self.swap(a,b)
-                    if ok:
+                    if self._direct_move_creates_match(a,b):
                         sim=self.clone()
                         out.append((a,b,sim.resolve_swap(a,b,record_steps=False)))
         return out
+
+
+    def _detect_t5(self,runs):
+        """
+        Detect an upright or inverted T made from exactly five normal colored
+        stones: a horizontal 3-run and a vertical 3-run of the same color.
+
+        The intersection must be the middle of the horizontal bar and one end
+        of the vertical stem. This excludes + shapes and sideways T shapes.
+
+        Called only for the player's direct swap, never for cascades.
+        """
+        horizontals=[
+            run for run in runs
+            if run["dir"]=="h"
+            and len(run["cells"])==3
+            and run["value"] in range(5)
+        ]
+        verticals=[
+            run for run in runs
+            if run["dir"]=="v"
+            and len(run["cells"])==3
+            and run["value"] in range(5)
+        ]
+
+        for h in horizontals:
+            hmid=h["cells"][1]
+
+            for v in verticals:
+                if v["value"]!=h["value"]:
+                    continue
+
+                common=set(h["cells"]) & set(v["cells"])
+                if len(common)!=1:
+                    continue
+
+                intersection=next(iter(common))
+
+                if intersection!=hmid:
+                    continue
+
+                # Stem meets the bar at the top or bottom endpoint.
+                if intersection not in (v["cells"][0],v["cells"][-1]):
+                    continue
+
+                union=set(h["cells"]) | set(v["cells"])
+                if len(union)!=5:
+                    continue
+
+                return {
+                    "cells":union,
+                    "intersection":intersection,
+                    "value":h["value"],
+                }
+
+        return None
 
     def _expand_specials(self,runs,preferred_special_cell=None):
         matched=set()
@@ -262,12 +351,27 @@ class ServerBoard:
             step_points,gray_removed,white_removed,removed,gray_value,white_value
         )=self._score_cells(matched)
 
+        # A directly activated multicolor joker counts as 5 stones of the
+        # color it matched. _score_cells() already counted its temporary
+        # target-color representation as 1, so add the remaining +4 here.
+        for sp in (specials or []):
+            if sp.get("kind")=="multicolor_used":
+                value=sp.get("value")
+                cell=tuple(sp.get("cell",(-1,-1)))
+                if value in range(5) and cell in matched:
+                    step_points[value]+=4
+
         creations=[]
         for sp in (specials or []):
             if sp.get("kind")=="numbered_special":
                 creations.append((
                     tuple(sp["cell"]),
                     make_numbered_special(sp["value"],sp["number"]),
+                ))
+            elif sp.get("kind")=="multicolor_t5":
+                creations.append((
+                    tuple(sp["cell"]),
+                    MULTICOLOR,
                 ))
 
         for r,c in matched:
@@ -384,24 +488,79 @@ class ServerBoard:
         if not self.adjacent(a,b):
             return None
 
+        ar,ac=a
+        br,bc=b
+        raw_a=self.grid[ar][ac]
+        raw_b=self.grid[br][bc]
+
+        # Multicolor wildcard may only act during this direct player move.
+        # It is deliberately invisible to collect_runs() during cascades.
+        wildcard_move=False
+        wildcard_target=None
+        wildcard_cell_after=None
+
+        if raw_a==MULTICOLOR and base_color(raw_b) in range(5):
+            wildcard_move=True
+            wildcard_target=base_color(raw_b)
+            wildcard_cell_after=b
+        elif raw_b==MULTICOLOR and base_color(raw_a) in range(5):
+            wildcard_move=True
+            wildcard_target=base_color(raw_a)
+            wildcard_cell_after=a
+
         self.swap(a,b)
+
+        if wildcard_move:
+            wr,wc=wildcard_cell_after
+            # For this one direct move only, treat the multicolor stone as the
+            # chosen normal color. If the move fails it is restored below.
+            self.grid[wr][wc]=wildcard_target
+
         runs=self.collect_runs()
 
+        # A directly moved wildcard must itself participate in the new match.
+        if wildcard_move:
+            if not any(wildcard_cell_after in run["cells"] for run in runs):
+                self.grid[ar][ac]=raw_a
+                self.grid[br][bc]=raw_b
+                return None
+
         if not runs:
-            self.swap(a,b)
+            self.grid[ar][ac]=raw_a
+            self.grid[br][bc]=raw_b
             return None
 
-        # The initial match may itself grant an extra turn.
-        initial_extra=any(len(run["cells"])>=4 for run in runs)
-        preferred=None
-        for candidate in (b,a):
-            if any(candidate in run["cells"] for run in runs):
-                preferred=candidate
-                break
-        matched,specials=self._expand_specials(
-            runs,
-            preferred_special_cell=preferred,
-        )
+        # T5 is checked ONLY here, so cascades can never create the wildcard.
+        t5=self._detect_t5(runs)
+
+        if t5 is not None:
+            matched=set(t5["cells"])
+            intersection=t5["intersection"]
+            specials=[{
+                "kind":"multicolor_t5",
+                "value":t5["value"],
+                "cell":list(intersection),
+            }]
+            initial_extra=True
+        else:
+            initial_extra=any(len(run["cells"])>=4 for run in runs)
+            preferred=None
+            for candidate in (b,a):
+                if any(candidate in run["cells"] for run in runs):
+                    preferred=candidate
+                    break
+
+            matched,specials=self._expand_specials(
+                runs,
+                preferred_special_cell=preferred,
+            )
+
+        if wildcard_move:
+            specials.append({
+                "kind":"multicolor_used",
+                "value":wildcard_target,
+                "cell":list(wildcard_cell_after),
+            })
 
         result=self._resolve_after_initial_clear(
             matched,

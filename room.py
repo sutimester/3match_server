@@ -1,4 +1,4 @@
-import asyncio,json
+import asyncio,json,random
 from board import ServerBoard
 
 MAX_HP=100
@@ -19,12 +19,12 @@ class Room:
         self.shield=[0,0]
         self.color_scores=[[0]*7,[0]*7]
         self.player_names=["Player 1","Player 2"]
-        self.starting_player=0;self.turn=0;self.winner=None;self.move_number=0
+        self.starting_player=random.randint(0,1);self.turn=self.starting_player;self.winner=None;self.move_number=0
         self.ability_used=[
             [False,False,False,False,False],
             [False,False,False,False,False],
         ]
-        self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
+        self.own_turn_count=[0,0];self.own_turn_count[self.starting_player]=1;self.extra_turn_bank=[0,0]
         self.restart_ready=[False,False];self.restart_pending=False
         self.action_log=[]
 
@@ -67,7 +67,7 @@ class Room:
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
             "action_log":self.action_log,
-            "rules_version":81,
+            "rules_version":84,
         }
         if extra:d.update(extra)
         return d
@@ -472,12 +472,17 @@ class Room:
         self.max_hp=[100,100]
         self.shield=[0,0]
         self.color_scores=[[0]*7,[0]*7]
-        self.player_names=[name,"Player 2"];self.starting_player=0;self.turn=0;self.winner=None;self.move_number=0
+        self.player_names=[name,"Player 2"]
+        self.starting_player=random.randint(0,1)
+        self.turn=self.starting_player
+        self.winner=None;self.move_number=0
         self.ability_used=[
             [False,False,False,False,False],
             [False,False,False,False,False],
         ]
-        self.own_turn_count=[1,0];self.extra_turn_bank=[0,0]
+        self.own_turn_count=[0,0]
+        self.own_turn_count[self.starting_player]=1
+        self.extra_turn_bank=[0,0]
         self.restart_ready=[False,False]
         self.restart_pending=False
         self.action_log=["Opponent left the match."]
