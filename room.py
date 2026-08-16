@@ -67,7 +67,7 @@ class Room:
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
             "action_log":self.action_log,
-            "rules_version":85,
+            "rules_version":88,
         }
         if extra:d.update(extra)
         return d
@@ -180,7 +180,7 @@ class Room:
             effects.append("extra turn")
 
         if result.get("board_regenerated"):
-            effects.append("new playable board generated")
+            effects.append("NEW BOARD generated: no valid moves remained")
 
         # Include exactly what disappeared in every cascade after the initial clear.
         effects.extend(
@@ -457,9 +457,14 @@ class Room:
         self.restart_ready=[False,False]
         self.restart_pending=False
         self.action_log=[
-            f"New game. {self.player_names[self.starting_player]} starts."
+            "NEW BOARD: a fresh board was generated for the new game.",
+            f"New game. {self.player_names[self.starting_player]} starts.",
         ]
-        await self.broadcast({"event":"new_game","starting_player":self.starting_player})
+        await self.broadcast({
+            "event":"new_game",
+            "starting_player":self.starting_player,
+            "board":self.board.grid,
+        })
 
     async def reset_after_leave(self):
         if self.player_count!=1:return

@@ -549,7 +549,7 @@ class ServerBoard:
             }]
             initial_extra=True
         else:
-            initial_extra=any(len(run["cells"])>=4 for run in runs)
+            initial_extra=any(len(run["cells"])>3 for run in runs)
             preferred=None
             for candidate in (b,a):
                 if any(candidate in run["cells"] for run in runs):
