@@ -628,6 +628,57 @@ class ServerBoard:
             "board_regenerated":regenerated,
         }
 
+    def resolve_refill_matches(self,anchored_cells=None,record_steps=True):
+        """Resolve refill-created matches with zero scoring/effects."""
+        anchors=set(anchored_cells or [])
+        runs=self.collect_runs(anchors)
+
+        if not runs:
+            return {
+                "animation_steps":[],
+                "removed":0,
+                "board_regenerated":False,
+            }
+
+        steps=[]
+        removed=0
+
+        while runs:
+            matched,specials=self._expand_specials(runs)
+            matched-=anchors
+            if not matched:
+                break
+
+            _p,_g,_w,n,step,_gv,_wv=self._clear_cells(
+                matched,
+                record_steps,
+                specials,
+                anchors,
+            )
+            removed+=n
+
+            if step:
+                step["color_points"]=[0]*COLOR_COUNT
+                step["gray_removed"]=0
+                step["white_removed"]=0
+                step["gray_value"]=0
+                step["white_value"]=0
+                step["environmental_clear"]=True
+                steps.append(step)
+
+            runs=self.collect_runs(anchors)
+
+        regenerated=False
+        if not self.has_valid_move():
+            self.regenerate_playable()
+            regenerated=True
+
+        return {
+            "animation_steps":steps,
+            "removed":removed,
+            "board_regenerated":regenerated,
+        }
+
     def resolve_swap(self,a,b,record_steps=True,opponent_lock=None,own_lock=None):
         if not self.adjacent(a,b):
             return None

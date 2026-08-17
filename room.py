@@ -77,7 +77,7 @@ class Room:
             "lock_changed":self.lock_changed,
             "lock_age":self.lock_age,
             "lock_refill_locked":self.lock_refill_locked,
-            "rules_version":106,
+            "rules_version":107,
         }
         if extra:d.update(extra)
         return d
@@ -471,11 +471,29 @@ class Room:
                 record_step=True,
             )
 
+        cleanup_steps=[]
         if filled>0:
             self.lock_refill_locked[p]=True
             self._push_log(
                 f"{self.player_names[p]} lock release refilled {filled} empty board spaces."
             )
+
+            cleanup=self.board.resolve_refill_matches(
+                anchored_cells=anchors,
+                record_steps=True,
+            )
+            cleanup_steps=cleanup.get("animation_steps",[])
+
+            if cleanup_steps:
+                self._push_log(
+                    f"REFILL CLEANUP: {cleanup.get('removed',0)} stones cleared automatically with no score."
+                )
+
+            if cleanup.get("board_regenerated"):
+                self._reset_all_locks()
+                self._push_log(
+                    "NEW BOARD: refill cleanup left no valid moves; locks reset."
+                )
 
         action="UNLOCKED" if old==cell else "LOCKED"
         self._push_log(
@@ -487,6 +505,7 @@ class Room:
             "lock_refilled":filled,
             "board":self.board.grid,
             "refill_step":refill_step if filled>0 else None,
+            "cleanup_steps":cleanup_steps,
         })
         return {"ok":True}
 
@@ -515,12 +534,30 @@ class Room:
         self._push_log(
             f"{self.player_names[p]} lock expired before turn."
         )
+        cleanup_steps=[]
         if filled>0:
             self._push_log(
                 f"Lock expiry refilled {filled} empty board spaces before turn."
             )
 
-        return filled,step,True
+            cleanup=self.board.resolve_refill_matches(
+                anchored_cells=anchors,
+                record_steps=True,
+            )
+            cleanup_steps=cleanup.get("animation_steps",[])
+
+            if cleanup_steps:
+                self._push_log(
+                    f"REFILL CLEANUP: {cleanup.get('removed',0)} stones cleared automatically with no score."
+                )
+
+            if cleanup.get("board_regenerated"):
+                self._reset_all_locks()
+                self._push_log(
+                    "NEW BOARD: refill cleanup left no valid moves; locks reset."
+                )
+
+        return filled,step,True,cleanup_steps
 
 
     async def make_move(self,p,a,b):
@@ -586,6 +623,7 @@ class Room:
         lock_expire_filled=0
         lock_expire_step=None
         lock_expired=False
+        lock_cleanup_steps=[]
         next_player=None
         is_extra=False
 
@@ -595,7 +633,7 @@ class Room:
                 result.get("extra_turn",False),
             )
 
-            lock_expire_filled,lock_expire_step,lock_expired=(
+            lock_expire_filled,lock_expire_step,lock_expired,lock_cleanup_steps=(
                 self._prepare_lock_before_turn(next_player)
             )
 
@@ -606,7 +644,7 @@ class Room:
         if lock_expire_step is not None:
             payload["animation_steps"]=list(
                 result.get("animation_steps",[])
-            )+[lock_expire_step]
+            )+[lock_expire_step]+list(lock_cleanup_steps)
 
         payload.update({
             "event":"move",
