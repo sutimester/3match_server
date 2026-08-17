@@ -30,6 +30,7 @@ class Room:
         self.locked_cells=[None,None]
         self.lock_changed=[False,False]
         self.lock_age=[0,0]
+        self.lock_refill_locked=[False,False]
 
     @property
     def player_count(self):return sum(1 for s in self.sockets if s is not None)
@@ -73,7 +74,8 @@ class Room:
             "locked_cells":[list(x) if x is not None else None for x in self.locked_cells],
             "lock_changed":self.lock_changed,
             "lock_age":self.lock_age,
-            "rules_version":96,
+            "lock_refill_locked":self.lock_refill_locked,
+            "rules_version":97,
         }
         if extra:d.update(extra)
         return d
@@ -382,6 +384,7 @@ class Room:
         self.is_extra_turn=[False,False]
         self.is_extra_turn[p]=bool(extra_turn)
         self.lock_changed[p]=False
+        self.lock_refill_locked[p]=False
         if not extra_turn:
             self.own_turn_count[p]+=1
 
@@ -399,6 +402,9 @@ class Room:
             return {"ok":False,"reason":"waiting_for_opponent"}
         if p!=self.turn:
             return {"ok":False,"reason":"not_your_turn"}
+        if self.lock_refill_locked[p]:
+            return {"ok":False,"reason":"lock_refill_already_happened"}
+
         try:
             cell=(int(cell[0]),int(cell[1]))
         except Exception:
@@ -420,11 +426,33 @@ class Room:
             self.lock_age[p]=0
         self.lock_changed[p]=True
 
+        filled=0
+        new_lock=self.locked_cells[p]
+
+        if old is not None and old!=new_lock:
+            anchors={
+                x
+                for x in self.locked_cells
+                if x is not None
+            }
+            filled=self.board.refill_after_lock_change(anchors)
+
+        if filled>0:
+            self.lock_refill_locked[p]=True
+            self._push_log(
+                f"{self.player_names[p]} lock release refilled {filled} empty board spaces."
+            )
+
         action="UNLOCKED" if old==cell else "LOCKED"
         self._push_log(
             f"{self.player_names[p]} {action} stone at {cell[0]+1},{cell[1]+1}."
         )
-        await self.broadcast({"event":"lock","lock_player":p})
+        await self.broadcast({
+            "event":"lock",
+            "lock_player":p,
+            "lock_refilled":filled,
+            "board":self.board.grid,
+        })
         return {"ok":True}
 
     async def make_move(self,p,a,b):
@@ -522,6 +550,7 @@ class Room:
         self.locked_cells=[None,None]
         self.lock_changed=[False,False]
         self.lock_age=[0,0]
+        self.lock_refill_locked=[False,False]
         self.restart_ready=[False,False]
         self.restart_pending=False
         self.locked_cells=[None,None]

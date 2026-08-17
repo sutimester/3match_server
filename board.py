@@ -343,8 +343,20 @@ class ServerBoard:
 
         return matched,specials
 
-    def _collapse(self,anchored_cells=None):
+    def _collapse(self,anchored_cells=None,fill_released=False):
+        """
+        Gravity with locked stones as hard barriers.
+
+        Normal clear/cascade:
+        - region above the first lock can receive new stones from the top,
+        - regions below a lock compact existing stones only,
+        - missing cells below a lock remain None.
+
+        When fill_released=True (lock removed/moved), every region that is
+        reachable from the top after applying the CURRENT locks is refilled.
+        """
         anchors=set(anchored_cells or [])
+        filled_new=0
 
         for c in range(COLS):
             anchor_rows=sorted(
@@ -353,9 +365,9 @@ class ServerBoard:
             )
             boundaries=[-1]+anchor_rows+[ROWS]
 
-            for i in range(len(boundaries)-1):
-                lo=boundaries[i]+1
-                hi=boundaries[i+1]
+            for region_i in range(len(boundaries)-1):
+                lo=boundaries[region_i]+1
+                hi=boundaries[region_i+1]
                 if lo>=hi:
                     continue
 
@@ -364,14 +376,39 @@ class ServerBoard:
                     for r in range(lo,hi)
                     if self.grid[r][c] is not None
                 ]
+
                 missing=(hi-lo)-len(survivors)
-                values=[
-                    random.randrange(COLOR_COUNT)
-                    for _ in range(missing)
-                ]+survivors
+
+                # Only the topmost region has a natural supply from above.
+                # During an explicit lock-release refill, regions which are no
+                # longer protected by a lock are also filled.
+                can_spawn = (region_i==0) or fill_released
+
+                if can_spawn:
+                    spawned=[
+                        random.randrange(COLOR_COUNT)
+                        for _ in range(missing)
+                    ]
+                    filled_new += missing
+                else:
+                    spawned=[None]*missing
+
+                values=spawned+survivors
 
                 for offset,r in enumerate(range(lo,hi)):
                     self.grid[r][c]=values[offset]
+
+        return filled_new
+
+    def refill_after_lock_change(self,anchored_cells=None):
+        """
+        Re-apply gravity after a lock is removed or moved.
+        Returns how many new stones had to be generated.
+        """
+        return self._collapse(
+            anchored_cells=anchored_cells,
+            fill_released=True,
+        )
 
 
     def _score_cells(self,cells):
@@ -449,7 +486,7 @@ class ServerBoard:
             self.grid[r][c]=value
 
         remaining_anchors=set(anchored_cells or [])-set(matched)
-        self._collapse(remaining_anchors)
+        self._collapse(remaining_anchors,fill_released=False)
 
         step=None
         if record_steps:
