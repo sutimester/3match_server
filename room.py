@@ -77,7 +77,7 @@ class Room:
             "lock_changed":self.lock_changed,
             "lock_age":self.lock_age,
             "lock_refill_locked":self.lock_refill_locked,
-            "rules_version":105,
+            "rules_version":106,
         }
         if extra:d.update(extra)
         return d
@@ -306,6 +306,26 @@ class Room:
                     "LOCKS RESET: new board generation removed all active locks."
                 )
 
+            # Purple is also the player's own clear. If it clears the
+            # player's locked stone, the lock ends immediately.
+            own_lock=self.locked_cells[p]
+            if own_lock is not None and result.get("animation_steps"):
+                own_lock_matched=any(
+                    own_lock in {
+                        tuple(x)
+                        for x in step.get("matched",[])
+                    }
+                    for step in result["animation_steps"]
+                )
+                if own_lock_matched:
+                    self.locked_cells[p]=None
+                    self.lock_age[p]=0
+                    self.lock_changed[p]=True
+                    self.lock_refill_locked[p]=False
+                    self._push_log(
+                        f"{self.player_names[p]} lock removed by own match."
+                    )
+
             # Purple uses the exact same scoring application as a board move.
             enemy=1-p
             shield_before_enemy=self.shield[enemy]
@@ -528,13 +548,21 @@ class Room:
 
         own_lock=self.locked_cells[p]
         if own_lock is not None and result.get("animation_steps"):
-            initial_matched={
-                tuple(x)
-                for x in result["animation_steps"][0].get("matched",[])
-            }
-            if own_lock in initial_matched:
+            own_lock_matched=any(
+                own_lock in {
+                    tuple(x)
+                    for x in step.get("matched",[])
+                }
+                for step in result["animation_steps"]
+            )
+            if own_lock_matched:
                 self.locked_cells[p]=None
                 self.lock_age[p]=0
+                self.lock_changed[p]=True
+                self.lock_refill_locked[p]=False
+                self._push_log(
+                    f"{self.player_names[p]} lock removed by own match."
+                )
 
         enemy=1-p
         shield_before_enemy=self.shield[enemy]
