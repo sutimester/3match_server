@@ -400,15 +400,43 @@ class ServerBoard:
 
         return filled_new
 
-    def refill_after_lock_change(self,anchored_cells=None):
+    def refill_after_lock_change(self,anchored_cells=None,record_step=False):
         """
         Re-apply gravity after a lock is removed or moved.
-        Returns how many new stones had to be generated.
+
+        Returns an int by default for backward compatibility.
+        With record_step=True returns (filled_count, animation_step).
         """
-        return self._collapse(
+        before=[row[:] for row in self.grid] if record_step else None
+
+        filled=self._collapse(
             anchored_cells=anchored_cells,
             fill_released=True,
         )
+
+        if not record_step:
+            return filled
+
+        step=None
+        if filled>0:
+            step={
+                "before":before,
+                "after":[row[:] for row in self.grid],
+                "matched":[],
+                "color_points":[0]*COLOR_COUNT,
+                "gray_removed":0,
+                "white_removed":0,
+                "gray_value":0,
+                "white_value":0,
+                "specials":[],
+                "anchored_cells":[
+                    list(cell)
+                    for cell in sorted(set(anchored_cells or []))
+                ],
+                "refill_only":True,
+            }
+
+        return filled,step
 
 
     def _score_cells(self,cells):

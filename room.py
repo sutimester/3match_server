@@ -75,7 +75,7 @@ class Room:
             "lock_changed":self.lock_changed,
             "lock_age":self.lock_age,
             "lock_refill_locked":self.lock_refill_locked,
-            "rules_version":97,
+            "rules_version":100,
         }
         if extra:d.update(extra)
         return d
@@ -370,13 +370,7 @@ class Room:
     def _begin_turn(self,p,extra_turn=False):
         self.turn=p
 
-        # Fresh lock -> faded on next own turn -> removed on following own turn.
-        if self.locked_cells[p] is not None:
-            if self.lock_age[p]>=1:
-                self.locked_cells[p]=None
-                self.lock_age[p]=0
-            else:
-                self.lock_age[p]=1
+        # Lock aging/expiry is prepared before this playable turn starts.
 
         self.ability_used[p]=[
             False,False,False,False,False
@@ -413,6 +407,9 @@ class Room:
         if not self.board.in_bounds(cell):
             return {"ok":False,"reason":"invalid_cell"}
 
+        if self.board.grid[cell[0]][cell[1]] is None:
+            return {"ok":False,"reason":"cannot_lock_empty_space"}
+
         other=1-p
         if self.locked_cells[other]==cell:
             return {"ok":False,"reason":"stone_already_locked"}
@@ -435,7 +432,10 @@ class Room:
                 for x in self.locked_cells
                 if x is not None
             }
-            filled=self.board.refill_after_lock_change(anchors)
+            filled,refill_step=self.board.refill_after_lock_change(
+                anchors,
+                record_step=True,
+            )
 
         if filled>0:
             self.lock_refill_locked[p]=True
@@ -452,8 +452,42 @@ class Room:
             "lock_player":p,
             "lock_refilled":filled,
             "board":self.board.grid,
+            "refill_step":refill_step if filled>0 else None,
         })
         return {"ok":True}
+
+    def _prepare_lock_before_turn(self,p):
+        """Advance or expire p's lock immediately before p's own turn."""
+        if p not in (0,1) or self.locked_cells[p] is None:
+            return 0,None,False
+
+        if self.lock_age[p]<1:
+            self.lock_age[p]=1
+            return 0,None,False
+
+        self.locked_cells[p]=None
+        self.lock_age[p]=0
+
+        anchors={
+            x
+            for x in self.locked_cells
+            if x is not None
+        }
+        filled,step=self.board.refill_after_lock_change(
+            anchors,
+            record_step=True,
+        )
+
+        self._push_log(
+            f"{self.player_names[p]} lock expired before turn."
+        )
+        if filled>0:
+            self._push_log(
+                f"Lock expiry refilled {filled} empty board spaces before turn."
+            )
+
+        return filled,step,True
+
 
     async def make_move(self,p,a,b):
         if self.winner is not None:return {"ok":False,"reason":"game_over"}
@@ -501,17 +535,40 @@ class Room:
 
         self.move_number+=1
 
+        lock_expire_filled=0
+        lock_expire_step=None
+        lock_expired=False
+        next_player=None
+        is_extra=False
+
         if self.winner is None:
-            next_player,is_extra=self._resolve_next_turn(p,result.get("extra_turn",False))
+            next_player,is_extra=self._resolve_next_turn(
+                p,
+                result.get("extra_turn",False),
+            )
+
+            lock_expire_filled,lock_expire_step,lock_expired=(
+                self._prepare_lock_before_turn(next_player)
+            )
+
             self._begin_turn(next_player,is_extra)
 
         payload=dict(result)
+
+        if lock_expire_step is not None:
+            payload["animation_steps"]=list(
+                result.get("animation_steps",[])
+            )+[lock_expire_step]
+
         payload.update({
             "event":"move",
             "mover":p,
             "move_a":list(a),
             "move_b":list(b),
             "awarded_color_points":result["color_points"],
+            "lock_expired":lock_expired,
+            "lock_expire_refilled":lock_expire_filled,
+            "prepared_turn_player":next_player,
         })
         await self.broadcast(payload)
         return {"ok":True}
