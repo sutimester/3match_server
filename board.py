@@ -459,6 +459,16 @@ class ServerBoard:
                 continue
 
             removed+=1
+
+            # A multicolor joker has no fixed base-color bucket.
+            # During a direct joker activation resolve_swap() temporarily
+            # replaces it with the chosen normal color, so that case is
+            # scored normally and multicolor_used adds the remaining +4.
+            # If a joker is removed indirectly (row/column effect, cascade,
+            # simulation, etc.), never use its raw value (13) as a list index.
+            if raw==MULTICOLOR:
+                continue
+
             v=base_color(raw)
             number=special_number(raw)
 
@@ -468,7 +478,7 @@ class ServerBoard:
             elif v==WHITE_STONE:
                 white_removed+=1
                 white_value+=(number*10 if number else 10)
-            else:
+            elif isinstance(v,int) and 0<=v<COLOR_COUNT:
                 points[v]+=1
 
         return points,gray_removed,white_removed,removed,gray_value,white_value
