@@ -27,6 +27,8 @@ class Room:
         self.own_turn_count=[0,0];self.own_turn_count[self.starting_player]=1;self.extra_turn_bank=[0,0]
         self.restart_ready=[False,False];self.restart_pending=False
         self.action_log=[]
+        self.locked_cells=[None,None]
+        self.lock_changed=[False,False]
 
     @property
     def player_count(self):return sum(1 for s in self.sockets if s is not None)
@@ -67,7 +69,9 @@ class Room:
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
             "action_log":self.action_log,
-            "rules_version":88,
+            "locked_cells":[list(x) if x is not None else None for x in self.locked_cells],
+            "lock_changed":self.lock_changed,
+            "rules_version":91,
         }
         if extra:d.update(extra)
         return d
@@ -366,6 +370,7 @@ class Room:
         ]
         self.is_extra_turn=[False,False]
         self.is_extra_turn[p]=bool(extra_turn)
+        self.lock_changed[p]=False
         if not extra_turn:
             self.own_turn_count[p]+=1
 
@@ -376,18 +381,64 @@ class Room:
             return (p,True)
         return (1-p,False)
 
+    async def set_lock(self,p,cell):
+        if self.winner is not None:
+            return {"ok":False,"reason":"game_over"}
+        if self.player_count<2:
+            return {"ok":False,"reason":"waiting_for_opponent"}
+        if p!=self.turn:
+            return {"ok":False,"reason":"not_your_turn"}
+        if self.lock_changed[p]:
+            return {"ok":False,"reason":"lock_already_changed"}
+
+        try:
+            cell=(int(cell[0]),int(cell[1]))
+        except Exception:
+            return {"ok":False,"reason":"invalid_cell"}
+
+        if not self.board.in_bounds(cell):
+            return {"ok":False,"reason":"invalid_cell"}
+
+        other=1-p
+        if self.locked_cells[other]==cell:
+            return {"ok":False,"reason":"stone_already_locked"}
+
+        old=self.locked_cells[p]
+        self.locked_cells[p]=None if old==cell else cell
+        self.lock_changed[p]=True
+
+        action="UNLOCKED" if old==cell else "LOCKED"
+        self._push_log(
+            f"{self.player_names[p]} {action} stone at {cell[0]+1},{cell[1]+1}."
+        )
+        await self.broadcast({"event":"lock","lock_player":p})
+        return {"ok":True}
+
     async def make_move(self,p,a,b):
         if self.winner is not None:return {"ok":False,"reason":"game_over"}
         if self.player_count<2:return {"ok":False,"reason":"waiting_for_opponent"}
         if p!=self.turn:return {"ok":False,"reason":"not_your_turn"}
 
-        result=self.board.resolve_swap(a,b)
+        result=self.board.resolve_swap(
+            a,b,
+            opponent_lock=self.locked_cells[1-p],
+            own_lock=self.locked_cells[p],
+        )
         if result is None:
             self._push_log(
                 f"{self.player_names[p]}: invalid move - no match."
             )
             await self.broadcast({"event":"invalid","invalid_player":p})
             return {"ok":False,"reason":"no_match"}
+
+        own_lock=self.locked_cells[p]
+        if own_lock is not None and result.get("animation_steps"):
+            initial_matched={
+                tuple(x)
+                for x in result["animation_steps"][0].get("matched",[])
+            }
+            if own_lock in initial_matched:
+                self.locked_cells[p]=None
 
         enemy=1-p
         shield_before_enemy=self.shield[enemy]
@@ -454,8 +505,12 @@ class Room:
         self.own_turn_count=[0,0];self.own_turn_count[self.starting_player]=1
         self.extra_turn_bank=[0,0]
         self.is_extra_turn=[False,False]
+        self.locked_cells=[None,None]
+        self.lock_changed=[False,False]
         self.restart_ready=[False,False]
         self.restart_pending=False
+        self.locked_cells=[None,None]
+        self.lock_changed=[False,False]
         self.action_log=[
             "NEW BOARD: a fresh board was generated for the new game.",
             f"New game. {self.player_names[self.starting_player]} starts.",

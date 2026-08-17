@@ -101,80 +101,112 @@ class ServerBoard:
             if not self.collect_runs() and self.has_valid_move():
                 return
 
-    def collect_runs(self):
+    def collect_runs(self,blocked_cells=None):
+        blocked=set(blocked_cells or [])
         runs=[]
+
+        def value_at(r,c):
+            if (r,c) in blocked:
+                return None
+            return base_color(self.grid[r][c])
+
         for r in range(ROWS):
             s=0
             while s<COLS:
-                raw=self.grid[r][s]
-                v=base_color(raw)
+                v=value_at(r,s)
                 e=s+1
-                while e<COLS and base_color(self.grid[r][e])==v:
+                while e<COLS and value_at(r,e)==v:
                     e+=1
                 if v is not None and e-s>=3:
-                    runs.append({"dir":"h","value":v,"cells":[(r,c) for c in range(s,e)]})
+                    runs.append({
+                        "dir":"h",
+                        "value":v,
+                        "cells":[(r,c) for c in range(s,e)],
+                    })
                 s=e
 
         for c in range(COLS):
             s=0
             while s<ROWS:
-                raw=self.grid[s][c]
-                v=base_color(raw)
+                v=value_at(s,c)
                 e=s+1
-                while e<ROWS and base_color(self.grid[e][c])==v:
+                while e<ROWS and value_at(e,c)==v:
                     e+=1
                 if v is not None and e-s>=3:
-                    runs.append({"dir":"v","value":v,"cells":[(r,c) for r in range(s,e)]})
+                    runs.append({
+                        "dir":"v",
+                        "value":v,
+                        "cells":[(r,c) for r in range(s,e)],
+                    })
                 s=e
+
         return runs
 
-    def _direct_move_creates_match(self,a,b):
+
+    def _direct_move_creates_match(
+        self,
+        a,
+        b,
+        opponent_lock=None,
+        own_lock=None,
+    ):
         if not self.adjacent(a,b):
             return False
 
-        ar,ac=a
-        br,bc=b
+        anchors={x for x in (opponent_lock,own_lock) if x is not None}
+        if a in anchors or b in anchors:
+            return False
+
+        ar,ac=a; br,bc=b
         raw_a=self.grid[ar][ac]
         raw_b=self.grid[br][bc]
 
-        wildcard_target=None
-        wildcard_after=None
-
-        if raw_a==MULTICOLOR and base_color(raw_b) in range(5):
-            wildcard_target=base_color(raw_b)
-            wildcard_after=b
-        elif raw_b==MULTICOLOR and base_color(raw_a) in range(5):
-            wildcard_target=base_color(raw_a)
-            wildcard_after=a
+        joker_after=None
+        if raw_a==MULTICOLOR:
+            joker_after=b
+        elif raw_b==MULTICOLOR:
+            joker_after=a
 
         self.swap(a,b)
 
-        if wildcard_after is not None:
-            wr,wc=wildcard_after
-            self.grid[wr][wc]=wildcard_target
+        def initial_runs_for(blocked):
+            if joker_after is None:
+                return self.collect_runs(blocked)
 
-        runs=self.collect_runs()
+            jr,jc=joker_after
+            choices=[]
+            for color in range(5):
+                self.grid[jr][jc]=color
+                cruns=self.collect_runs(blocked)
+                participating=[
+                    run for run in cruns
+                    if joker_after in run["cells"]
+                    and run["value"]==color
+                ]
+                if participating:
+                    choices.append(cruns)
+            return choices[0] if choices else []
 
-        if wildcard_after is not None:
-            ok=any(wildcard_after in run["cells"] for run in runs)
-        else:
-            ok=bool(runs)
+        blocked={opponent_lock} if opponent_lock is not None else set()
+        runs=initial_runs_for(blocked)
 
         self.grid[ar][ac]=raw_a
         self.grid[br][bc]=raw_b
-        return ok
+        return bool(runs)
 
-    def has_valid_move(self):
+    def has_valid_move(self,opponent_lock=None,own_lock=None):
         for r in range(ROWS):
             for c in range(COLS):
                 for b in ((r,c+1),(r+1,c)):
                     if b[0]>=ROWS or b[1]>=COLS:
                         continue
-                    if self._direct_move_creates_match((r,c),b):
+                    if self._direct_move_creates_match(
+                        (r,c),b,opponent_lock,own_lock
+                    ):
                         return True
         return False
 
-    def valid_moves(self):
+    def valid_moves(self,opponent_lock=None,own_lock=None):
         out=[]
         for r in range(ROWS):
             for c in range(COLS):
@@ -182,9 +214,18 @@ class ServerBoard:
                     if b[0]>=ROWS or b[1]>=COLS:
                         continue
                     a=(r,c)
-                    if self._direct_move_creates_match(a,b):
+                    if self._direct_move_creates_match(
+                        a,b,opponent_lock,own_lock
+                    ):
                         sim=self.clone()
-                        out.append((a,b,sim.resolve_swap(a,b,record_steps=False)))
+                        result=sim.resolve_swap(
+                            a,b,
+                            record_steps=False,
+                            opponent_lock=opponent_lock,
+                            own_lock=own_lock,
+                        )
+                        if result is not None:
+                            out.append((a,b,result))
         return out
 
 
@@ -302,17 +343,36 @@ class ServerBoard:
 
         return matched,specials
 
-    def _collapse(self):
+    def _collapse(self,anchored_cells=None):
+        anchors=set(anchored_cells or [])
+
         for c in range(COLS):
-            survivors=[
-                self.grid[r][c]
-                for r in range(ROWS)
-                if self.grid[r][c] is not None
-            ]
-            missing=ROWS-len(survivors)
-            values=[random.randrange(COLOR_COUNT) for _ in range(missing)]+survivors
-            for r in range(ROWS):
-                self.grid[r][c]=values[r]
+            anchor_rows=sorted(
+                r for r in range(ROWS)
+                if (r,c) in anchors
+            )
+            boundaries=[-1]+anchor_rows+[ROWS]
+
+            for i in range(len(boundaries)-1):
+                lo=boundaries[i]+1
+                hi=boundaries[i+1]
+                if lo>=hi:
+                    continue
+
+                survivors=[
+                    self.grid[r][c]
+                    for r in range(lo,hi)
+                    if self.grid[r][c] is not None
+                ]
+                missing=(hi-lo)-len(survivors)
+                values=[
+                    random.randrange(COLOR_COUNT)
+                    for _ in range(missing)
+                ]+survivors
+
+                for offset,r in enumerate(range(lo,hi)):
+                    self.grid[r][c]=values[offset]
+
 
     def _score_cells(self,cells):
         """
@@ -351,7 +411,7 @@ class ServerBoard:
         for i,v in enumerate(step):
             total[i]+=v
 
-    def _clear_cells(self,matched,record_steps,specials=None):
+    def _clear_cells(self,matched,record_steps,specials=None,anchored_cells=None):
         before=[row[:] for row in self.grid] if record_steps else None
         (
             step_points,gray_removed,white_removed,removed,gray_value,white_value
@@ -388,7 +448,8 @@ class ServerBoard:
         for (r,c),value in creations:
             self.grid[r][c]=value
 
-        self._collapse()
+        remaining_anchors=set(anchored_cells or [])-set(matched)
+        self._collapse(remaining_anchors)
 
         step=None
         if record_steps:
@@ -414,6 +475,8 @@ class ServerBoard:
         initial_specials,
         record_steps=True,
         initial_counts_as_match=False,
+        cascade_blocked=None,
+        anchored_cells=None,
     ):
         total_points=[0]*COLOR_COUNT
         cascade_points=[]
@@ -427,7 +490,7 @@ class ServerBoard:
         cascade=0
         extra_turn=False
 
-        p,g,w,n,step,gv,wv=self._clear_cells(initial_matched,record_steps,initial_specials)
+        p,g,w,n,step,gv,wv=self._clear_cells(initial_matched,record_steps,initial_specials,anchored_cells)
         self._add_points(total_points,p)
         cascade_points.append(p)
         total_gray+=g
@@ -437,7 +500,8 @@ class ServerBoard:
         total_white_value+=wv
         if step:steps.append(step)
 
-        runs=self.collect_runs()
+        active_anchors=set(anchored_cells or [])-set(initial_matched)
+        runs=self.collect_runs(active_anchors)
         while runs:
             cascade+=1
 
@@ -445,9 +509,10 @@ class ServerBoard:
                 extra_turn=True
 
             matched,new_specials=self._expand_specials(runs)
+            matched-=active_anchors
             specials.extend(new_specials)
 
-            p,g,w,n,step,gv,wv=self._clear_cells(matched,record_steps,new_specials)
+            p,g,w,n,step,gv,wv=self._clear_cells(matched,record_steps,new_specials,active_anchors)
             self._add_points(total_points,p)
             cascade_points.append(p)
             total_gray+=g
@@ -457,7 +522,8 @@ class ServerBoard:
             total_white_value+=wv
             if step:steps.append(step)
 
-            runs=self.collect_runs()
+            active_anchors-=set(matched)
+            runs=self.collect_runs(active_anchors)
 
         regenerated=False
         if not self.has_valid_move():
@@ -490,8 +556,12 @@ class ServerBoard:
             "board_regenerated":regenerated,
         }
 
-    def resolve_swap(self,a,b,record_steps=True):
+    def resolve_swap(self,a,b,record_steps=True,opponent_lock=None,own_lock=None):
         if not self.adjacent(a,b):
+            return None
+
+        anchors={x for x in (opponent_lock,own_lock) if x is not None}
+        if a in anchors or b in anchors:
             return None
 
         ar,ac=a
@@ -499,48 +569,67 @@ class ServerBoard:
         raw_a=self.grid[ar][ac]
         raw_b=self.grid[br][bc]
 
-        # Multicolor wildcard may only act during this direct player move.
-        # It is deliberately invisible to collect_runs() during cascades.
-        wildcard_move=False
-        wildcard_target=None
-        wildcard_cell_after=None
-
-        if raw_a==MULTICOLOR and base_color(raw_b) in range(5):
-            wildcard_move=True
-            wildcard_target=base_color(raw_b)
-            wildcard_cell_after=b
-        elif raw_b==MULTICOLOR and base_color(raw_a) in range(5):
-            wildcard_move=True
-            wildcard_target=base_color(raw_a)
-            wildcard_cell_after=a
+        joker_after=None
+        if raw_a==MULTICOLOR:
+            joker_after=b
+        elif raw_b==MULTICOLOR:
+            joker_after=a
 
         self.swap(a,b)
 
-        if wildcard_move:
-            wr,wc=wildcard_cell_after
-            # For this one direct move only, treat the multicolor stone as the
-            # chosen normal color. If the move fails it is restored below.
-            self.grid[wr][wc]=wildcard_target
+        wildcard_move=joker_after is not None
+        wildcard_target=None
+        runs=None
 
-        runs=self.collect_runs()
-
-        # A directly moved wildcard must itself participate in the new match.
         if wildcard_move:
-            if not any(wildcard_cell_after in run["cells"] for run in runs):
+            # Directly moved joker: test all five normal colors.
+            # It may never represent gray or white.
+            jr,jc=joker_after
+            candidate_results=[]
+
+            for color in range(5):
+                self.grid[jr][jc]=color
+                color_runs=self.collect_runs({opponent_lock} if opponent_lock is not None else set())
+
+                participating=[
+                    run for run in color_runs
+                    if joker_after in run["cells"]
+                    and run["value"]==color
+                ]
+
+                if participating:
+                    # Prefer the color producing the largest direct match.
+                    value=sum(len(run["cells"]) for run in participating)
+                    candidate_results.append(
+                        (value,color,color_runs)
+                    )
+
+            if not candidate_results:
                 self.grid[ar][ac]=raw_a
                 self.grid[br][bc]=raw_b
                 return None
+
+            candidate_results.sort(
+                key=lambda item:item[0],
+                reverse=True,
+            )
+            _value,wildcard_target,runs=candidate_results[0]
+            self.grid[jr][jc]=wildcard_target
+
+        else:
+            runs=self.collect_runs({opponent_lock} if opponent_lock is not None else set())
 
         if not runs:
             self.grid[ar][ac]=raw_a
             self.grid[br][bc]=raw_b
             return None
 
-        # T5 is checked ONLY here, so cascades can never create the wildcard.
+        # T5 is checked ONLY for this direct move; cascades cannot create joker.
         t5=self._detect_t5(runs)
 
         if t5 is not None:
             matched=set(t5["cells"])
+            if opponent_lock is not None: matched.discard(opponent_lock)
             intersection=t5["intersection"]
             specials=[{
                 "kind":"multicolor_t5",
@@ -549,7 +638,12 @@ class ServerBoard:
             }]
             initial_extra=True
         else:
-            initial_extra=any(len(run["cells"])>3 for run in runs)
+            initial_extra=any(
+                len(run["cells"])>3
+                for run in runs
+                if not wildcard_move or joker_after in run["cells"]
+            )
+
             preferred=None
             for candidate in (b,a):
                 if any(candidate in run["cells"] for run in runs):
@@ -561,11 +655,22 @@ class ServerBoard:
                 preferred_special_cell=preferred,
             )
 
+        direct_run_cells=set()
+        for run in runs:
+            direct_run_cells.update(run["cells"])
+
+        protected=set()
+        if opponent_lock is not None:
+            protected.add(opponent_lock)
+        if own_lock is not None and own_lock not in direct_run_cells:
+            protected.add(own_lock)
+        matched-=protected
+
         if wildcard_move:
             specials.append({
                 "kind":"multicolor_used",
                 "value":wildcard_target,
-                "cell":list(wildcard_cell_after),
+                "cell":list(joker_after),
             })
 
         result=self._resolve_after_initial_clear(
@@ -573,12 +678,15 @@ class ServerBoard:
             specials,
             record_steps=record_steps,
             initial_counts_as_match=True,
+            cascade_blocked=anchors,
+            anchored_cells=anchors,
         )
 
         if initial_extra:
             result["extra_turn"]=True
 
         return result
+
 
     def clear_selected_color(self,value,record_steps=True):
         if not isinstance(value,int) or value<0 or value>=GRAY:

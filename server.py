@@ -46,7 +46,7 @@ class Match3Server:
         if p is None:return None
         await s.send(json.dumps({
             "type":"joined","room":room.code,"room_name":room.display_name or room.code,
-            "player":p,"public":room.public,"rules_version":88
+            "player":p,"public":room.public,"rules_version":91
         }))
         await room.broadcast({"event":"player_joined"})
         return p
@@ -57,7 +57,7 @@ class Match3Server:
         room.add_spectator(s)
         await s.send(json.dumps({
             "type":"spectating","room":room.code,"room_name":room.display_name or room.code,
-            "public":True,"rules_version":88
+            "public":True,"rules_version":91
         }))
         await s.send(json.dumps(room.state_payload({"event":"spectator_joined","spectator_mode":True})))
         return True
@@ -109,6 +109,20 @@ class Match3Server:
 
                 elif action=="set_name":
                     if room is not None and player is not None:await room.set_player_name(player,data.get("name",""))
+
+                elif action=="lock":
+                    if room is None or player is None:
+                        continue
+                    cell=data.get("cell")
+                    if not (isinstance(cell,list) and len(cell)==2):
+                        continue
+                    out=await room.set_lock(player,cell)
+                    if not out["ok"]:
+                        await self.send_error(
+                            socket,
+                            out["reason"].replace("_"," ").title(),
+                            out["reason"],
+                        )
 
                 elif action=="ability":
                     if room is None or player is None:continue
