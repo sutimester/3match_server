@@ -460,12 +460,6 @@ class ServerBoard:
 
             removed+=1
 
-            # A multicolor joker has no fixed base-color bucket.
-            # During a direct joker activation resolve_swap() temporarily
-            # replaces it with the chosen normal color, so that case is
-            # scored normally and multicolor_used adds the remaining +4.
-            # If a joker is removed indirectly (row/column effect, cascade,
-            # simulation, etc.), never use its raw value (13) as a list index.
             if raw==MULTICOLOR:
                 continue
 

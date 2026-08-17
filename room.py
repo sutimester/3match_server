@@ -1,6 +1,15 @@
 import asyncio,json,random
 
 PLAYER_COLORS=[[241, 68, 79], [61, 190, 105], [67, 126, 241], [245, 207, 64], [183, 83, 222], [142, 149, 160], [250, 250, 250]]
+from board import ServerBoard
+
+MAX_HP=100
+ABILITY_COST=10
+RED=0
+GREEN=1
+BLUE=2
+YELLOW=3
+PURPLE=4
 
 class Room:
     def __init__(self,code,public=False,display_name=None):
@@ -62,8 +71,7 @@ class Room:
         d={
             "type":"state","room":self.code,"room_name":self.display_name or self.code,"public":self.public,
             "board":self.board.grid,"hp":self.hp,"max_hp":self.max_hp,"shield":self.shield,"color_scores":self.color_scores,
-            "player_names":self.player_names,"player_colors":self.player_colors,
-            "starting_player":self.starting_player,
+            "player_names":self.player_names,"player_colors":self.player_colors,"starting_player":self.starting_player,
             "turn":self.turn,"winner":self.winner,"players":self.player_count,"spectators":self.spectator_count,
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "is_extra_turn":self.is_extra_turn,
@@ -73,7 +81,7 @@ class Room:
             "lock_changed":self.lock_changed,
             "lock_age":self.lock_age,
             "lock_refill_locked":self.lock_refill_locked,
-            "rules_version":118,
+            "rules_version":122,
         }
         if extra:d.update(extra)
         return d
@@ -214,35 +222,80 @@ class Room:
 
         return absorbed,amount
 
+    def _apply_player_color_bonus(self,p,step):
+        selected=self._selected_color_index(p)
+        points=[int(v) for v in step.get("color_points",[0]*7)]
+        gray=int(step.get("gray_removed",0))
+        white=int(step.get("white_removed",0))
+        gray_value=int(step.get("gray_value",gray*10))
+        white_value=int(step.get("white_value",white*10))
+
+        if selected in range(5):
+            points[selected]*=2
+        elif selected==5 and gray>0:
+            gray_value+=10
+        elif selected==6 and white>0:
+            white_value+=10
+
+        return points,gray_value,white_value
+
     def _apply_scoring_result(self,p,result):
         """
-        The ONLY online board-result application path.
-        Includes points, white shield gain and gray damage.
+        Apply authoritative multiplayer scoring using the player's synchronized
+        selected color on EVERY scoring step/cascade.
         """
-        o=1-p
+        enemy=1-p
+        steps=result.get("animation_steps") or []
 
-        # Award points from every clear in the complete chain.
-        chain_steps=result.get("cascade_color_points") or []
-        if chain_steps:
-            points=[
-                sum(int(step[i]) for step in chain_steps)
-                for i in range(7)
-            ]
+        if steps:
+            for step in steps:
+                # Environmental refill cleanup never grants player rewards.
+                if step.get("environmental_clear"):
+                    continue
+
+                points,gray_value,white_value=self._apply_player_color_bonus(
+                    p,
+                    step,
+                )
+
+                for i,v in enumerate(points):
+                    self.color_scores[p][i]+=int(v)
+
+                if white_value:
+                    self.shield[p]=min(
+                        100,
+                        self.shield[p]+int(white_value),
+                    )
+
+                if gray_value:
+                    self._apply_damage(
+                        enemy,
+                        int(gray_value),
+                    )
         else:
-            points=[int(v) for v in result.get("color_points",[0]*7)]
+            points,gray_value,white_value=self._apply_player_color_bonus(
+                p,
+                result,
+            )
 
-        for i,v in enumerate(points):
-            self.color_scores[p][i]+=int(v)
+            for i,v in enumerate(points):
+                self.color_scores[p][i]+=int(v)
 
-        self.shield[p]=min(100,self.shield[p]+int(result.get("shield_gain",0)))
+            if white_value:
+                self.shield[p]=min(
+                    100,
+                    self.shield[p]+int(white_value),
+                )
 
-        self._apply_damage(
-            o,
-            result.get("damage",0),
-        )
+            if gray_value:
+                self._apply_damage(
+                    enemy,
+                    int(gray_value),
+                )
 
-        if self.hp[o]<=0:
+        if self.hp[enemy]<=0:
             self.winner=p
+
 
     def _reset_all_locks(self):
         self.locked_cells=[None,None]
@@ -434,10 +487,8 @@ class Room:
                 color=[int(color[0]),int(color[1]),int(color[2])]
             except Exception:
                 return {"ok":False,"reason":"invalid_color"}
-
             if color not in PLAYER_COLORS:
                 return {"ok":False,"reason":"invalid_color"}
-
             self.player_colors[p]=color[:]
 
         await self.broadcast({
@@ -446,6 +497,13 @@ class Room:
             "color":self.player_colors[p],
         })
         return {"ok":True}
+
+    def _selected_color_index(self,p):
+        color=self.player_colors[p]
+        try:
+            return PLAYER_COLORS.index(color)
+        except ValueError:
+            return None
 
     async def set_lock(self,p,cell):
         if self.winner is not None:
@@ -701,13 +759,11 @@ class Room:
             self.restart_pending=False;return
 
         self.board=ServerBoard()
-
         for p in (0,1):
             if self.player_color_random[p]:
                 other=self.player_colors[1-p]
                 choices=[c for c in PLAYER_COLORS if c!=other]
                 self.player_colors[p]=random.choice(choices or PLAYER_COLORS)[:]
-
         self.hp=[100,100]
         self.max_hp=[100,100]
         self.shield=[0,0]
@@ -742,8 +798,6 @@ class Room:
         remaining=next(s for s in self.sockets if s is not None)
         old_index=0 if self.sockets[0] is remaining else 1
         name=self.player_names[old_index]
-        kept_color=self.player_colors[old_index][:]
-        kept_random=self.player_color_random[old_index]
         self.sockets=[remaining,None]
         self.board=ServerBoard()
         self.hp=[100,100]
@@ -751,8 +805,6 @@ class Room:
         self.shield=[0,0]
         self.color_scores=[[0]*7,[0]*7]
         self.player_names=[name,"Player 2"]
-        self.player_colors=[kept_color,PLAYER_COLORS[1][:]]
-        self.player_color_random=[kept_random,False]
         self.starting_player=random.randint(0,1)
         self.turn=self.starting_player
         self.winner=None;self.move_number=0
