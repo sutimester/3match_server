@@ -352,8 +352,8 @@ class ServerBoard:
         - regions below a lock compact existing stones only,
         - missing cells below a lock remain None.
 
-        When fill_released=True (lock removed/moved), every region that is
-        reachable from the top after applying the CURRENT locks is refilled.
+        fill_released is retained for compatibility, but lock-release
+        refill uses the current barriers and never fills through an active lock.
         """
         anchors=set(anchored_cells or [])
         filled_new=0
@@ -409,9 +409,11 @@ class ServerBoard:
         """
         before=[row[:] for row in self.grid] if record_step else None
 
+        # Refill only regions that are reachable from the top with the
+        # CURRENT locks in place. Areas below any still-active lock remain empty.
         filled=self._collapse(
             anchored_cells=anchored_cells,
-            fill_released=True,
+            fill_released=False,
         )
 
         if not record_step:

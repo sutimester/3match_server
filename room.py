@@ -25,6 +25,7 @@ class Room:
             [False,False,False,False,False],
         ]
         self.own_turn_count=[0,0];self.own_turn_count[self.starting_player]=1;self.extra_turn_bank=[0,0]
+        self.is_extra_turn=[False,False]
         self.restart_ready=[False,False];self.restart_pending=False
         self.action_log=[]
         self.locked_cells=[None,None]
@@ -69,13 +70,14 @@ class Room:
             "player_names":self.player_names,"starting_player":self.starting_player,
             "turn":self.turn,"winner":self.winner,"players":self.player_count,"spectators":self.spectator_count,
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
+            "is_extra_turn":self.is_extra_turn,
             "restart_ready":self.restart_ready,"restart_pending":self.restart_pending,"move_number":self.move_number,
             "action_log":self.action_log,
             "locked_cells":[list(x) if x is not None else None for x in self.locked_cells],
             "lock_changed":self.lock_changed,
             "lock_age":self.lock_age,
             "lock_refill_locked":self.lock_refill_locked,
-            "rules_version":100,
+            "rules_version":105,
         }
         if extra:d.update(extra)
         return d
@@ -246,6 +248,12 @@ class Room:
         if self.hp[o]<=0:
             self.winner=p
 
+    def _reset_all_locks(self):
+        self.locked_cells=[None,None]
+        self.lock_changed=[False,False]
+        self.lock_age=[0,0]
+        self.lock_refill_locked=[False,False]
+
     def yellow_available(self,p):
         # Once per normal own turn; unavailable during any extra turn.
         return not self.is_extra_turn[p]
@@ -291,6 +299,12 @@ class Room:
                 self.color_scores[p][PURPLE]+=ABILITY_COST
                 self.ability_used[p][PURPLE]=False
                 return {"ok":False,"reason":"invalid_purple_target"}
+
+            if result.get("board_regenerated"):
+                self._reset_all_locks()
+                self._push_log(
+                    "LOCKS RESET: new board generation removed all active locks."
+                )
 
             # Purple uses the exact same scoring application as a board move.
             enemy=1-p
@@ -506,6 +520,12 @@ class Room:
             await self.broadcast({"event":"invalid","invalid_player":p})
             return {"ok":False,"reason":"no_match"}
 
+        if result.get("board_regenerated"):
+            self._reset_all_locks()
+            self._push_log(
+                "LOCKS RESET: new board generation removed all active locks."
+            )
+
         own_lock=self.locked_cells[p]
         if own_lock is not None and result.get("animation_steps"):
             initial_matched={
@@ -610,8 +630,6 @@ class Room:
         self.lock_refill_locked=[False,False]
         self.restart_ready=[False,False]
         self.restart_pending=False
-        self.locked_cells=[None,None]
-        self.lock_changed=[False,False]
         self.action_log=[
             "NEW BOARD: a fresh board was generated for the new game.",
             f"New game. {self.player_names[self.starting_player]} starts.",
@@ -644,6 +662,11 @@ class Room:
         self.own_turn_count=[0,0]
         self.own_turn_count[self.starting_player]=1
         self.extra_turn_bank=[0,0]
+        self.is_extra_turn=[False,False]
+        self.locked_cells=[None,None]
+        self.lock_changed=[False,False]
+        self.lock_age=[0,0]
+        self.lock_refill_locked=[False,False]
         self.restart_ready=[False,False]
         self.restart_pending=False
         self.action_log=["Opponent left the match."]
