@@ -29,6 +29,7 @@ class Room:
         self.action_log=[]
         self.locked_cells=[None,None]
         self.lock_changed=[False,False]
+        self.lock_age=[0,0]
 
     @property
     def player_count(self):return sum(1 for s in self.sockets if s is not None)
@@ -71,7 +72,8 @@ class Room:
             "action_log":self.action_log,
             "locked_cells":[list(x) if x is not None else None for x in self.locked_cells],
             "lock_changed":self.lock_changed,
-            "rules_version":92,
+            "lock_age":self.lock_age,
+            "rules_version":96,
         }
         if extra:d.update(extra)
         return d
@@ -365,6 +367,15 @@ class Room:
 
     def _begin_turn(self,p,extra_turn=False):
         self.turn=p
+
+        # Fresh lock -> faded on next own turn -> removed on following own turn.
+        if self.locked_cells[p] is not None:
+            if self.lock_age[p]>=1:
+                self.locked_cells[p]=None
+                self.lock_age[p]=0
+            else:
+                self.lock_age[p]=1
+
         self.ability_used[p]=[
             False,False,False,False,False
         ]
@@ -401,7 +412,12 @@ class Room:
             return {"ok":False,"reason":"stone_already_locked"}
 
         old=self.locked_cells[p]
-        self.locked_cells[p]=None if old==cell else cell
+        if old==cell:
+            self.locked_cells[p]=None
+            self.lock_age[p]=0
+        else:
+            self.locked_cells[p]=cell
+            self.lock_age[p]=0
         self.lock_changed[p]=True
 
         action="UNLOCKED" if old==cell else "LOCKED"
@@ -436,6 +452,7 @@ class Room:
             }
             if own_lock in initial_matched:
                 self.locked_cells[p]=None
+                self.lock_age[p]=0
 
         enemy=1-p
         shield_before_enemy=self.shield[enemy]
@@ -504,6 +521,7 @@ class Room:
         self.is_extra_turn=[False,False]
         self.locked_cells=[None,None]
         self.lock_changed=[False,False]
+        self.lock_age=[0,0]
         self.restart_ready=[False,False]
         self.restart_pending=False
         self.locked_cells=[None,None]

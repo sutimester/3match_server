@@ -463,6 +463,11 @@ class ServerBoard:
                 "gray_value":gray_value,
                 "white_value":white_value,
                 "specials":list(specials or []),
+                "anchored_cells":[
+                    list(cell)
+                    for cell in sorted(set(anchored_cells or []))
+                    if cell not in set(matched)
+                ],
             }
 
         return (
