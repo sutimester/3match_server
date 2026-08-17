@@ -71,7 +71,7 @@ class Room:
             "action_log":self.action_log,
             "locked_cells":[list(x) if x is not None else None for x in self.locked_cells],
             "lock_changed":self.lock_changed,
-            "rules_version":91,
+            "rules_version":92,
         }
         if extra:d.update(extra)
         return d
@@ -388,9 +388,6 @@ class Room:
             return {"ok":False,"reason":"waiting_for_opponent"}
         if p!=self.turn:
             return {"ok":False,"reason":"not_your_turn"}
-        if self.lock_changed[p]:
-            return {"ok":False,"reason":"lock_already_changed"}
-
         try:
             cell=(int(cell[0]),int(cell[1]))
         except Exception:
