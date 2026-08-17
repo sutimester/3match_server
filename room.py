@@ -1,13 +1,6 @@
 import asyncio,json,random
-from board import ServerBoard
 
-MAX_HP=100
-ABILITY_COST=10
-RED=0
-GREEN=1
-BLUE=2
-YELLOW=3
-PURPLE=4
+PLAYER_COLORS=[[241, 68, 79], [61, 190, 105], [67, 126, 241], [245, 207, 64], [183, 83, 222], [142, 149, 160], [250, 250, 250]]
 
 class Room:
     def __init__(self,code,public=False,display_name=None):
@@ -19,6 +12,8 @@ class Room:
         self.shield=[0,0]
         self.color_scores=[[0]*7,[0]*7]
         self.player_names=["Player 1","Player 2"]
+        self.player_colors=[PLAYER_COLORS[0][:],PLAYER_COLORS[1][:]]
+        self.player_color_random=[False,False]
         self.starting_player=random.randint(0,1);self.turn=self.starting_player;self.winner=None;self.move_number=0
         self.ability_used=[
             [False,False,False,False,False],
@@ -67,7 +62,8 @@ class Room:
         d={
             "type":"state","room":self.code,"room_name":self.display_name or self.code,"public":self.public,
             "board":self.board.grid,"hp":self.hp,"max_hp":self.max_hp,"shield":self.shield,"color_scores":self.color_scores,
-            "player_names":self.player_names,"starting_player":self.starting_player,
+            "player_names":self.player_names,"player_colors":self.player_colors,
+            "starting_player":self.starting_player,
             "turn":self.turn,"winner":self.winner,"players":self.player_count,"spectators":self.spectator_count,
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "is_extra_turn":self.is_extra_turn,
@@ -77,7 +73,7 @@ class Room:
             "lock_changed":self.lock_changed,
             "lock_age":self.lock_age,
             "lock_refill_locked":self.lock_refill_locked,
-            "rules_version":107,
+            "rules_version":115,
         }
         if extra:d.update(extra)
         return d
@@ -423,6 +419,34 @@ class Room:
             return (p,True)
         return (1-p,False)
 
+    async def set_color(self,p,color,random_choice=False):
+        if p not in (0,1):
+            return {"ok":False,"reason":"invalid_player"}
+
+        self.player_color_random[p]=bool(random_choice)
+
+        if self.player_color_random[p]:
+            other=self.player_colors[1-p]
+            choices=[c for c in PLAYER_COLORS if c!=other]
+            self.player_colors[p]=random.choice(choices or PLAYER_COLORS)[:]
+        else:
+            try:
+                color=[int(color[0]),int(color[1]),int(color[2])]
+            except Exception:
+                return {"ok":False,"reason":"invalid_color"}
+
+            if color not in PLAYER_COLORS:
+                return {"ok":False,"reason":"invalid_color"}
+
+            self.player_colors[p]=color[:]
+
+        await self.broadcast({
+            "event":"player_color",
+            "color_player":p,
+            "color":self.player_colors[p],
+        })
+        return {"ok":True}
+
     async def set_lock(self,p,cell):
         if self.winner is not None:
             return {"ok":False,"reason":"game_over"}
@@ -677,6 +701,13 @@ class Room:
             self.restart_pending=False;return
 
         self.board=ServerBoard()
+
+        for p in (0,1):
+            if self.player_color_random[p]:
+                other=self.player_colors[1-p]
+                choices=[c for c in PLAYER_COLORS if c!=other]
+                self.player_colors[p]=random.choice(choices or PLAYER_COLORS)[:]
+
         self.hp=[100,100]
         self.max_hp=[100,100]
         self.shield=[0,0]
@@ -711,6 +742,8 @@ class Room:
         remaining=next(s for s in self.sockets if s is not None)
         old_index=0 if self.sockets[0] is remaining else 1
         name=self.player_names[old_index]
+        kept_color=self.player_colors[old_index][:]
+        kept_random=self.player_color_random[old_index]
         self.sockets=[remaining,None]
         self.board=ServerBoard()
         self.hp=[100,100]
@@ -718,6 +751,8 @@ class Room:
         self.shield=[0,0]
         self.color_scores=[[0]*7,[0]*7]
         self.player_names=[name,"Player 2"]
+        self.player_colors=[kept_color,PLAYER_COLORS[1][:]]
+        self.player_color_random=[kept_random,False]
         self.starting_player=random.randint(0,1)
         self.turn=self.starting_player
         self.winner=None;self.move_number=0
