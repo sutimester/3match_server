@@ -23,6 +23,7 @@ class Room:
         self.player_names=["Player 1","Player 2"]
         self.player_colors=[PLAYER_COLORS[0][:],PLAYER_COLORS[1][:]]
         self.player_color_random=[False,False]
+        self.player_avatars=[0,0]
         self.starting_player=random.randint(0,1);self.turn=self.starting_player;self.winner=None;self.move_number=0
         self.ability_used=[
             [False,False,False,False,False],
@@ -71,7 +72,10 @@ class Room:
         d={
             "type":"state","room":self.code,"room_name":self.display_name or self.code,"public":self.public,
             "board":self.board.grid,"hp":self.hp,"max_hp":self.max_hp,"shield":self.shield,"color_scores":self.color_scores,
-            "player_names":self.player_names,"player_colors":self.player_colors,"starting_player":self.starting_player,
+            "player_names":self.player_names,
+            "player_colors":self.player_colors,
+            "player_avatars":self.player_avatars,
+            "starting_player":self.starting_player,
             "turn":self.turn,"winner":self.winner,"players":self.player_count,"spectators":self.spectator_count,
             "ability_used":self.ability_used,"own_turn_count":self.own_turn_count,"extra_turn_bank":self.extra_turn_bank,
             "is_extra_turn":self.is_extra_turn,
@@ -81,7 +85,7 @@ class Room:
             "lock_changed":self.lock_changed,
             "lock_age":self.lock_age,
             "lock_refill_locked":self.lock_refill_locked,
-            "rules_version":122,
+            "rules_version":152,
         }
         if extra:d.update(extra)
         return d
@@ -504,6 +508,28 @@ class Room:
             return PLAYER_COLORS.index(color)
         except ValueError:
             return None
+
+    async def set_avatar(self,p,avatar):
+        if p not in (0,1):
+            return {"ok":False,"reason":"invalid_player"}
+
+        try:
+            avatar=int(avatar)
+        except Exception:
+            return {"ok":False,"reason":"invalid_avatar"}
+
+        # Current client has 12 avatars, indexed 0..11.
+        if avatar<0 or avatar>=12:
+            return {"ok":False,"reason":"invalid_avatar"}
+
+        self.player_avatars[p]=avatar
+
+        await self.broadcast({
+            "event":"player_avatar",
+            "avatar_player":p,
+            "avatar":avatar,
+        })
+        return {"ok":True}
 
     async def set_lock(self,p,cell):
         if self.winner is not None:

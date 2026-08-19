@@ -46,7 +46,7 @@ class Match3Server:
         if p is None:return None
         await s.send(json.dumps({
             "type":"joined","room":room.code,"room_name":room.display_name or room.code,
-            "player":p,"public":room.public,"rules_version":122
+            "player":p,"public":room.public,"rules_version":152
         }))
         await room.broadcast({"event":"player_joined"})
         return p
@@ -57,7 +57,7 @@ class Match3Server:
         room.add_spectator(s)
         await s.send(json.dumps({
             "type":"spectating","room":room.code,"room_name":room.display_name or room.code,
-            "public":True,"rules_version":122
+            "public":True,"rules_version":152
         }))
         await s.send(json.dumps(room.state_payload({"event":"spectator_joined","spectator_mode":True})))
         return True
@@ -117,6 +117,20 @@ class Match3Server:
                         player,
                         data.get("color"),
                         bool(data.get("random",False)),
+                    )
+                    if not out["ok"]:
+                        await self.send_error(
+                            socket,
+                            out["reason"].replace("_"," ").title(),
+                            out["reason"],
+                        )
+
+                elif action=="set_avatar":
+                    if room is None or player is None:
+                        continue
+                    out=await room.set_avatar(
+                        player,
+                        data.get("avatar"),
                     )
                     if not out["ok"]:
                         await self.send_error(
