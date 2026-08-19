@@ -85,7 +85,7 @@ class Room:
             "lock_changed":self.lock_changed,
             "lock_age":self.lock_age,
             "lock_refill_locked":self.lock_refill_locked,
-            "rules_version":152,
+            "rules_version":154,
         }
         if extra:d.update(extra)
         return d
