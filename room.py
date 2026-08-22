@@ -85,7 +85,7 @@ class Room:
             "lock_changed":self.lock_changed,
             "lock_age":self.lock_age,
             "lock_refill_locked":self.lock_refill_locked,
-            "rules_version":154,
+            "rules_version":155,
         }
         if extra:d.update(extra)
         return d
@@ -620,11 +620,11 @@ class Room:
     def _prepare_lock_before_turn(self,p):
         """Advance or expire p's lock immediately before p's own turn."""
         if p not in (0,1) or self.locked_cells[p] is None:
-            return 0,None,False
+            return 0,None,False,[]
 
         if self.lock_age[p]<1:
             self.lock_age[p]=1
-            return 0,None,False
+            return 0,None,False,[]
 
         self.locked_cells[p]=None
         self.lock_age[p]=0
@@ -824,6 +824,9 @@ class Room:
         remaining=next(s for s in self.sockets if s is not None)
         old_index=0 if self.sockets[0] is remaining else 1
         name=self.player_names[old_index]
+        kept_color=self.player_colors[old_index][:]
+        kept_random=self.player_color_random[old_index]
+        kept_avatar=self.player_avatars[old_index]
         self.sockets=[remaining,None]
         self.board=ServerBoard()
         self.hp=[100,100]
@@ -831,6 +834,9 @@ class Room:
         self.shield=[0,0]
         self.color_scores=[[0]*7,[0]*7]
         self.player_names=[name,"Player 2"]
+        self.player_colors=[kept_color,PLAYER_COLORS[1][:]]
+        self.player_color_random=[kept_random,False]
+        self.player_avatars=[kept_avatar,0]
         self.starting_player=random.randint(0,1)
         self.turn=self.starting_player
         self.winner=None;self.move_number=0
